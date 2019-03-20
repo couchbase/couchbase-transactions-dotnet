@@ -4,10 +4,10 @@ using Couchbase.Transactions.Config;
 
 namespace Couchbase.Transactions
 {
-    public interface ITransaction
+    public interface ITransactionClient
     {
         TransactionConfig Config { get; }
         TimeSpan Duration { get; }
-        Task<ITransactionResult> Run(Action<IAttemptContext> configureContext);
+        Task<ITransactionResult> Run(Action<IAttemptContext> context);
     }
 }
