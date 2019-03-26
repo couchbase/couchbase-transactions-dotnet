@@ -5,6 +5,7 @@ namespace Couchbase.Transactions.Config
 {
     public struct TransactionConfig
     {
+        public int MaxAttempts { get; }
         public TimeSpan Expiration { get; }
         public TimeSpan KeyValueTimeout { get; }
         public PersistTo PersistTo { get; }
@@ -22,10 +23,11 @@ namespace Couchbase.Transactions.Config
         public LogLevel CleanupOnFailureLogLevel { get; }
 
         public TransactionConfig(
-            TimeSpan expiration, TimeSpan keyValueTimeout, PersistTo persistTo, ReplicateTo replicateTo, LogLevel logLevel,
+            int maxAttempts, TimeSpan expiration, TimeSpan keyValueTimeout, PersistTo persistTo, ReplicateTo replicateTo, LogLevel logLevel,
             bool cleanupLostAttempts, bool cleanupClientAttempts, TimeSpan cleanupWindow, TimeSpan cleanupStatsInterval,
             LogLevel cleanupLogLevel, bool logOnFailure, LogLevel logOnFailureLogLevel, LogLevel cleanupOnFailureLogLevel)
         {
+            MaxAttempts = maxAttempts;
             Expiration = expiration;
             KeyValueTimeout = keyValueTimeout;
             PersistTo = persistTo;

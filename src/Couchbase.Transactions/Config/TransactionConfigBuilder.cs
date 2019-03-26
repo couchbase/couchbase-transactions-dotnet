@@ -5,6 +5,7 @@ namespace Couchbase.Transactions.Config
 {
     public class TransactionConfigBuilder
     {
+        private int _maxAttempts = 100;
         private TimeSpan _expiration = TimeSpan.FromSeconds(15);
         private TimeSpan _keyValueTimeout = TimeSpan.FromMilliseconds(2500);
         private PersistTo _persistTo = Couchbase.PersistTo.Zero;
@@ -24,6 +25,7 @@ namespace Couchbase.Transactions.Config
         public TransactionConfig Build()
         {
             return new TransactionConfig(
+                _maxAttempts,
                 _expiration,
                 _keyValueTimeout,
                 _persistTo,
@@ -38,6 +40,12 @@ namespace Couchbase.Transactions.Config
                 _onFailureLogLevel,
                 _cleanupOnFailureLogLevel
             );
+        }
+
+        public TransactionConfigBuilder MaxAttempts(int maxAttempts)
+        {
+            _maxAttempts = maxAttempts;
+            return this;
         }
 
         public TransactionConfigBuilder Expiration(TimeSpan expiration)
