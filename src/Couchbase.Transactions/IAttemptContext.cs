@@ -5,13 +5,13 @@ namespace Couchbase.Transactions
 {
     public interface IAttemptContext
     {
-        string AttemptId { get; }
         string TransactionId { get; }
+        string AttemptId { get; }
 
-        Task<ITransactionResult> Get(IBucket bucket, string key);
-        Task<ITransactionResult> Insert<T>(IBucket bucket, string key, T document);
-        Task<ITransactionResult> Replace<T>(IBucket bucket, string key, T document);
-        Task<ITransactionResult> Remove(IBucket bucket, string key);
+        Task<ITransactionDocument<T>> Get<T>(IBucket bucket, string key);
+        Task<ITransactionDocument<T>> Insert<T>(IBucket bucket, string key, T content);
+        Task<ITransactionDocument<T>> Replace<T>(IBucket bucket, ITransactionDocument<T> document);
+        Task Remove(IBucket bucket, ITransactionDocument document);
 
         Task Commit();
         Task Rollback();

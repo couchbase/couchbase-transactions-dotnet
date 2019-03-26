@@ -1,10 +1,22 @@
-﻿namespace Couchbase.Transactions
+﻿using Couchbase.Core;
+
+namespace Couchbase.Transactions
 {
-    public interface ITransactionDocument<out T>
+    public interface ITransactionDocument
     {
         string Key { get; }
-        ulong Cas { get; }
+        ulong Cas { get; set; }
+        TransactionDocumentStatus Status { get; set; }
+    }
+
+    public interface ITransactionDocument<out T> : ITransactionDocument
+    {
         T Content { get; }
-        TransactionDocumentStatus Status { get; }
+    }
+
+    internal interface ITransactionDocumentWithBucket
+    {
+        IBucket Bucket { get; }
+        string BucketName { get; }
     }
 }
