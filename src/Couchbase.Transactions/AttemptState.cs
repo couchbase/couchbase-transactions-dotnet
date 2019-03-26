@@ -1,12 +1,25 @@
-﻿namespace Couchbase.Transactions
+﻿using System.ComponentModel;
+
+namespace Couchbase.Transactions
 {
     public enum AttemptState
     {
+        [Description("NOT_STARTED")]
         NotStarted,
-        PEnding,
+
+        [Description("PENDING")]
+        Pending,
+
+        [Description("ABORTED")]
         Aborted,
+
+        [Description("COMMITTED")]
         Committed,
+
+        [Description("COMPLETED")]
         Completed,
+
+        [Description("ROLLED_BACK")]
         RolledBack
     }
 }
