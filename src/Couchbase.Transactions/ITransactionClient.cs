@@ -8,6 +8,6 @@ namespace Couchbase.Transactions
     {
         TransactionConfig Config { get; }
         TimeSpan Duration { get; }
-        Task<ITransactionResult> Run(Action<IAttemptContext> context);
+        Task<ITransactionResult> Run(Func<IAttemptContext, Task> transactionLogic);
     }
 }
