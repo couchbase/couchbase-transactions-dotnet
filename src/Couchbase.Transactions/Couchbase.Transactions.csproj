@@ -1,13 +1,19 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CouchbaseNetClient" Version="2.7.5" />
+    <Compile Remove="old\**" />
+    <EmbeddedResource Remove="old\**" />
+    <None Remove="old\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CouchbaseNetClient" Version="3.0.2" />
     <PackageReference Include="Crc32.NET" Version="1.2.0" />
-    <PackageReference Include="OpenTracing" Version="0.12.0" />
     <PackageReference Include="Polly" Version="7.1.0" />
   </ItemGroup>
 

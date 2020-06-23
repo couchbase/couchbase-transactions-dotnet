@@ -1,19 +1,17 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Text;
+using Couchbase.Core;
+using DnsClient.Internal;
+using Microsoft.Extensions.Logging;
 
 namespace Couchbase.Transactions
 {
-    internal class TransactionResult : ITransactionResult
+    public class TransactionResult
     {
-        public string TransactionId { get; }
-        public IReadOnlyCollection<ITransactionAttempt> Attempts { get; }
-        public TimeSpan Duration { get; }
-
-        public TransactionResult(string transactionId, IReadOnlyCollection<ITransactionAttempt> attempts, TimeSpan duration)
-        {
-            TransactionId = transactionId;
-            Attempts = attempts;
-            Duration = duration;
-        }
+        public ILogger<Transactions> Logger { get; internal set; }
+        public string TransactionId { get; internal set; }
+        public IEnumerable<TransactionAttempt> Attempts { get; internal set; }
+        public MutationToken MutationToken { get; internal set; }
     }
 }
