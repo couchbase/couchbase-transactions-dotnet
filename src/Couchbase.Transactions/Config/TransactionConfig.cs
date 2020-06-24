@@ -1,48 +1,53 @@
 ﻿using System;
-using Couchbase.Logging;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Text;
+using Couchbase.KeyValue;
+using Couchbase.Query;
+using Couchbase.Transactions.Cleanup;
+using Couchbase.Transactions.Support;
 
 namespace Couchbase.Transactions.Config
 {
-    public struct TransactionConfig
+    public class TransactionConfig
     {
-        public int MaxAttempts { get; }
-        public TimeSpan Expiration { get; }
-        public TimeSpan KeyValueTimeout { get; }
-        public PersistTo PersistTo { get; }
-        public ReplicateTo ReplicateTo { get; }
-        public LogLevel LogLevel { get; }
+        public const DurabilityLevel DefaultDurabilityLevel = DurabilityLevel.Majority;
+        public const int DefaultExpirationMilliseconds = 15_000;
+        public const int DefaultCleanupWindowMilliseconds = 60_000;
+        public const bool DefaultCleanupLostAttempts = true;
+        public const bool DefaultCleanupClientAttempts = true;
+        public const Severity DefaultLogOnFailure = Severity.Error;
 
-        public bool CleanupLostAttempts { get; }
-        public bool CleanupClientAttempts { get; }
-        public TimeSpan CleanupWindow { get; }
-        public TimeSpan CleanupStatsInterval { get; }
-        public LogLevel CleanupLogLevel { get; }
+        public TimeSpan ExpirationTime { get; internal set; }
+        public bool CleanupLostAttempts { get; internal set; }
+        public bool CleanupClientAttempts { get; internal set; }
+        public TimeSpan CleanupWindow { get; internal set; }
+        public bool LogDirectly => LogDirectlyLevel.HasValue;
+        public Severity? LogDirectlyLevel { get; internal set; }
+        public bool LogOnFailure => LogOnFailureLevel.HasValue;
+        public Severity? LogOnFailureLevel { get; internal set; }
+        public TimeSpan? KeyValueTimeout { get; internal set; }
+        public DurabilityLevel DurabilityLevel { get; internal set; }
 
-        public bool LogOnFailure { get; }
-        public LogLevel LogOnFailureLogLevel { get; }
-        public LogLevel CleanupOnFailureLogLevel { get; }
-
-        public TransactionConfig(
-            int maxAttempts, TimeSpan expiration, TimeSpan keyValueTimeout, PersistTo persistTo, ReplicateTo replicateTo, LogLevel logLevel,
-            bool cleanupLostAttempts, bool cleanupClientAttempts, TimeSpan cleanupWindow, TimeSpan cleanupStatsInterval,
-            LogLevel cleanupLogLevel, bool logOnFailure, LogLevel logOnFailureLogLevel, LogLevel cleanupOnFailureLogLevel)
+        internal TransactionConfig(
+            DurabilityLevel durabilityLevel = DefaultDurabilityLevel,
+            Severity? logDirectly = null,
+            Severity? logOnFailure = DefaultLogOnFailure,
+            TimeSpan? expirationTime = null,
+            TimeSpan? cleanupWindow = null,
+            TimeSpan? keyValueTimeout = null,
+            bool cleanupClientAttempts = DefaultCleanupClientAttempts,
+            bool cleanupLostAttempts = DefaultCleanupLostAttempts
+        )
         {
-            MaxAttempts = maxAttempts;
-            Expiration = expiration;
-            KeyValueTimeout = keyValueTimeout;
-            PersistTo = persistTo;
-            ReplicateTo = replicateTo;
-            LogLevel = logLevel;
-
+            ExpirationTime = expirationTime ?? TimeSpan.FromMilliseconds(DefaultExpirationMilliseconds);
             CleanupLostAttempts = cleanupLostAttempts;
             CleanupClientAttempts = cleanupClientAttempts;
-            CleanupWindow = cleanupWindow;
-            CleanupStatsInterval = cleanupStatsInterval;
-            CleanupLogLevel = cleanupLogLevel;
-
-            LogOnFailure = logOnFailure;
-            LogOnFailureLogLevel = logOnFailureLogLevel;
-            CleanupOnFailureLogLevel = cleanupOnFailureLogLevel;
+            CleanupWindow = cleanupWindow ?? TimeSpan.FromMilliseconds(DefaultCleanupWindowMilliseconds);
+            LogDirectlyLevel = logDirectly;
+            LogOnFailureLevel = logOnFailure;
+            KeyValueTimeout = keyValueTimeout;
+            DurabilityLevel = durabilityLevel;
         }
     }
 }
