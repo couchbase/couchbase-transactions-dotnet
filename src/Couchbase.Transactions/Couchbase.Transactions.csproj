@@ -12,9 +12,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="CouchbaseNetClient" Version="3.0.2" />
     <PackageReference Include="Crc32.NET" Version="1.2.0" />
     <PackageReference Include="Polly" Version="7.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\couchbase-net-client-fortxn\src\Couchbase\Couchbase.csproj" />
   </ItemGroup>
 
 </Project>

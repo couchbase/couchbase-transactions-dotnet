@@ -3,8 +3,15 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Transactions;
+using Couchbase.Core.Exceptions;
+using Couchbase.Core.IO.Transcoders;
+using Couchbase.Core.Logging;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.Deferred;
+using Couchbase.Transactions.Internal;
+using Couchbase.Transactions.Internal.Test;
+using Couchbase.Transactions.Log;
 
 namespace Couchbase.Transactions
 {
@@ -14,13 +21,25 @@ namespace Couchbase.Transactions
         private static long InstancesCreatedDoingBackgroundCleanup = 0;
         private readonly ICluster _cluster;
         private bool _disposedValue;
+        private readonly IRedactor _redactor;
 
         public TransactionConfig Config { get; }
+
+        private readonly ITypeTranscoder _typeTranscoder;
+
+        public string TransactionId { get; } = Guid.NewGuid().ToString();
+
+        internal ICluster Cluster => _cluster;
+
+        public ITestHooks TestHooks { get; set; } = DefaultTestHooks.Instance;
 
         private Transactions(ICluster cluster, TransactionConfig config)
         {
             _cluster = cluster ?? throw new ArgumentNullException(nameof(cluster));
             Config = config ?? throw new ArgumentNullException(nameof(config));
+            _typeTranscoder = _cluster.ClusterServices?.GetService(typeof(ITypeTranscoder)) as ITypeTranscoder ??
+                              throw new InvalidArgumentException($"{nameof(ITypeTranscoder)}Necessary type not registered.");
+            _redactor = _cluster.ClusterServices?.GetService(typeof(IRedactor)) as IRedactor ?? DefaultRedactor.Instance;
             Interlocked.Increment(ref InstancesCreated);
             if (config.CleanupLostAttempts)
             {
@@ -37,8 +56,40 @@ namespace Couchbase.Transactions
         public static Transactions Create(ICluster cluster, TransactionConfigBuilder configBuilder) =>
             Create(cluster, configBuilder.Build());
 
-        public Task<TransactionResult> Run(Action<AttemptContext> transactionLogic) => throw new NotImplementedException();
-        public Task<TransactionResult> Run(Action<AttemptContext> transactionLogic, PerTransactionConfig perConfig) => throw new NotImplementedException();
+        public Task<TransactionResult> Run(Func<AttemptContext, Task> transactionLogic) =>
+            Run(transactionLogic, PerTransactionConfigBuilder.Create().Build());
+
+        public async Task<TransactionResult> Run(Func<AttemptContext, Task> transactionLogic, PerTransactionConfig perConfig)
+        {
+            // TODO: placeholder before TXNN-5: Implement Core Loop
+            // real loop will run multiple attempts with retries
+            
+            var overallContext = new TransactionContext(
+                transactionId: Guid.NewGuid().ToString(),
+                startTime: DateTimeOffset.UtcNow,
+                config: Config,
+                perConfig: perConfig
+                );
+
+            var result = new TransactionResult();
+            var attempts = new List<TransactionAttempt>();
+            result.Attempts = attempts;
+            var attempt = new TransactionAttempt();
+            var ctx = new AttemptContext(
+                overallContext,
+                Config,
+                attempt.AttemptId,
+                this,
+                TestHooks,
+                _redactor,
+                _typeTranscoder
+                );
+
+            await transactionLogic(ctx).CAF();
+            attempts.Add(attempt);
+
+            return result;
+        }
 
         public Task<TransactionResult> Commit(TransactionSerializedContext serialized, PerTransactionConfig perConfig) => throw new NotImplementedException();
         public Task<TransactionResult> RollBack(TransactionSerializedContext serialized, PerTransactionConfig perConfig) => throw new NotImplementedException();
