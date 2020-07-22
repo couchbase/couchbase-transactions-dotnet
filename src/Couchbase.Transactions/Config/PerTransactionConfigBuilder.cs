@@ -21,5 +21,7 @@ namespace Couchbase.Transactions.Config
             _config.DurabilityLevel = durabilityLevel;
             return this;
         }
+
+        public PerTransactionConfig Build() => _config;
     }
 }

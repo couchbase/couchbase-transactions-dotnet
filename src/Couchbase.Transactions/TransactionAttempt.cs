@@ -15,7 +15,7 @@ namespace Couchbase.Transactions
         public ICouchbaseCollection? AtrCollection { get; internal set; }
         public string? AtrId { get; internal set; }
         public AttemptStates FinalState { get; internal set; }
-        public string AttemptId { get; internal set; }
+        public string AttemptId { get; } = Guid.NewGuid().ToString();
         public IEnumerable<string> StagedInsertedIds { get; internal set; }
         public IEnumerable<string> StagedReplaceIds { get; internal set; }
         public IEnumerable<string> StagedRemoveIds { get; internal set; }

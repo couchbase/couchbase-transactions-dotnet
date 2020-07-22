@@ -7,22 +7,49 @@ namespace Couchbase.Transactions.Support
 {
     public enum AttemptStates
     {
-        [Description("NOT_STARTED")]
-        NotStarted = 0,
+        [Description(AttemptStateExtensions.NothingWritten)]
+        NothingWritten = 0,
 
-        [Description("PENDING")]
+        [Description(AttemptStateExtensions.Pending)]
         Pending = 1,
 
-        [Description("ABORTED")]
+        [Description(AttemptStateExtensions.Aborted)]
         Aborted = 2,
 
-        [Description("COMMITTED")]
+        [Description(AttemptStateExtensions.Committed)]
         Committed = 3,
 
-        [Description("COMPLETED")]
+        [Description(AttemptStateExtensions.Completed)]
         Completed = 4,
 
-        [Description("ROLLED_BACK")]
+        [Description(AttemptStateExtensions.RolledBack)]
         RolledBack = 5
+    }
+
+    /// <summary>
+    /// Hackish boilerplate to make up for .NET's simplistic enums compared to the CB JVM Clients.
+    /// </summary>
+    internal static class AttemptStateExtensions
+    {
+        public const string NothingWritten = "NOTHING_WRITTEN";
+        public const string Pending = "PENDING";
+        public const string Aborted = "ABORTED";
+        public const string Committed = "COMITTED";
+        public const string Completed = "COMPLETED";
+        public const string RolledBack = "ROLLED_BACK";
+
+        public static string FullName(this AttemptStates status)
+        {
+            return status switch
+            {
+                AttemptStates.NothingWritten => NothingWritten,
+                AttemptStates.Pending => Pending,
+                AttemptStates.Aborted => Aborted,
+                AttemptStates.Committed => Committed,
+                AttemptStates.Completed => Completed,
+                AttemptStates.RolledBack => RolledBack,
+                _ => status.ToString(),
+            };
+        }
     }
 }
