@@ -10,16 +10,18 @@ namespace Couchbase.Transactions.Components
     public class TransactionLinks
     {
         public string? StagedContent { get; }
-        public string AtrId { get; }
-        public string AtrBucketName { get; }
-        public string AtrScopeName { get; }
-        public string AtrCollectionName { get; }
-        public string StagedTransactionId { get; }
-        public string StagedAttemptId { get; }
-        public string CasPreTxn { get; }
-        public string RevIdPreTxn { get; }
+        public string? AtrId { get; }
+        public string? AtrBucketName { get; }
+        public string? AtrScopeName { get; }
+        public string? AtrCollectionName { get; }
+        public string? StagedTransactionId { get; }
+        public string? StagedAttemptId { get; }
+        public string? CasPreTxn { get; }
+        public string? RevIdPreTxn { get; }
         public ulong? ExptimePreTxn { get; }
-        public string Op { get; }
+        public string? Op { get; }
+
+        public string AtrIdFull => $"{AtrBucketName ?? "-"}/{AtrScopeName ?? "-"}/{AtrCollectionName ?? "-"}/{AtrId ?? "-"}";
 
         public bool IsDocumentInTransaction => AtrId != null;
 
@@ -41,7 +43,7 @@ namespace Couchbase.Transactions.Components
             ulong? exptimePreTxn,
             string? op)
         {
-            StagedContent = stagedContent;
+            StagedContent = stagedContent ?? throw new ArgumentNullException(nameof(stagedContent));
             AtrId = atrId ?? throw new ArgumentNullException(nameof(atrId));
             AtrBucketName = atrBucketName ?? throw new ArgumentNullException(nameof(atrBucketName));
             AtrScopeName = atrScopeName ?? throw new ArgumentNullException(nameof(atrScopeName));

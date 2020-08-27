@@ -25,9 +25,9 @@ namespace Couchbase.Transactions
             [NotNull] byte[] content,
             ulong cas,
             [NotNull] ICouchbaseCollection collection,
-            TransactionLinks links,
+            TransactionLinks? links,
             TransactionJsonDocumentStatus status,
-            DocumentMetadata documentMetadata,
+            DocumentMetadata? documentMetadata,
             ITypeTranscoder transcoder)
         {
             Id = id;
@@ -42,16 +42,22 @@ namespace Couchbase.Transactions
 
         public TransactionJsonDocumentStatus Status { get; }
 
-        public TransactionLinks Links { get; }
+        public TransactionLinks? Links { get; }
 
         public string Id { get; }
         public ulong Cas { get; internal set; }
-        public DocumentMetadata DocumentMetadata { get; }
+        public DocumentMetadata? DocumentMetadata { get; }
         public ICouchbaseCollection Collection { get; }
 
         public T ContentAs<T>() => _transcoder.Decode<T>(_content, GetFlags<T>(), OpCode.Get);
 
-        private Flags GetFlags<T>() => _transcoder.GetFormat<T>(default(T));
+        // TODO: not sure about this.
+        private Flags GetFlags<T>() => default(T) != null ? _transcoder.GetFormat<T>(default(T)!) : new Flags()
+        {
+            Compression = Compression.None,
+            DataFormat = DataFormat.Json,
+            TypeCode = TypeCode.Object
+        };
 
         public static TransactionGetResult FromInsert(
             ICouchbaseCollection collection,
@@ -151,8 +157,8 @@ namespace Couchbase.Transactions
             string? op = null)
         {
             // TODO: check stagedContent for "<<REMOVE>>" sentinel value
-            string atrCollectionName = null;
-            string atrScopeName = null;
+            string? atrCollectionName = null;
+            string? atrScopeName = null;
             if (atrLongCollectionName != null)
             {
                 var pieces = atrLongCollectionName.Split('.');

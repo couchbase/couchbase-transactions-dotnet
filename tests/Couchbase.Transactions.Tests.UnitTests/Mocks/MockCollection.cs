@@ -86,12 +86,12 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
 
         public Task<ILookupInResult> LookupInAsync(string id, IEnumerable<LookupInSpec> specs, LookupInOptions? options = null)
         {
-            throw new NotImplementedException();
+            return Task.FromResult(new Mock<ILookupInResult>().Object);
         }
 
         public Task<IMutateInResult> MutateInAsync(string id, IEnumerable<MutateInSpec> specs, MutateInOptions? options = null)
         {
-            throw new NotImplementedException();
+            return Task.FromResult(new Mock<IMutateInResult>().Object);
         }
 
         public static ICluster CreateMockCluster(IEnumerable<TransactionGetResult> mockDocs) =>
@@ -111,8 +111,8 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
         }
 
         public uint? Cid { get; }
-        public string Name { get; }
-        public IScope Scope { get; }
+        public string Name { get; } = "default";
+        public IScope Scope { get; set; } 
         public IBinaryCollection Binary { get; }
     }
 }

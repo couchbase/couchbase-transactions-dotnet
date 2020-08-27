@@ -12,6 +12,7 @@ using Couchbase.Transactions.Deferred;
 using Couchbase.Transactions.Internal;
 using Couchbase.Transactions.Internal.Test;
 using Couchbase.Transactions.Log;
+using Microsoft.Extensions.Logging;
 
 namespace Couchbase.Transactions
 {
@@ -22,6 +23,7 @@ namespace Couchbase.Transactions
         private readonly ICluster _cluster;
         private bool _disposedValue;
         private readonly IRedactor _redactor;
+        private readonly ILoggerFactory loggerFactory;
 
         public TransactionConfig Config { get; }
 
@@ -45,6 +47,8 @@ namespace Couchbase.Transactions
             {
                 Interlocked.Increment(ref InstancesCreatedDoingBackgroundCleanup);
             }
+
+           loggerFactory = _cluster.ClusterServices.GetService(typeof(ILoggerFactory)) as ILoggerFactory;
 
             // TODO: kick off background cleanup "thread", if necessary
             // TODO: whatever the equivalent of 'cluster.environment().eventBus().publish(new TransactionsStarted(config));' is.
@@ -71,22 +75,43 @@ namespace Couchbase.Transactions
                 perConfig: perConfig
                 );
 
-            var result = new TransactionResult();
+            ILoggerFactory? loggerFactory = null;
+
+
+            var result = new TransactionResult() { TransactionId =  overallContext.TransactionId };
             var attempts = new List<TransactionAttempt>();
             result.Attempts = attempts;
-            var attempt = new TransactionAttempt();
-            var ctx = new AttemptContext(
-                overallContext,
-                Config,
-                attempt.AttemptId,
-                this,
-                TestHooks,
-                _redactor,
-                _typeTranscoder
+
+            // TODO: retry according to spec
+            for (int i = 0; i < 3; i++)
+            {
+                var ctx = new AttemptContext(
+                    overallContext,
+                    Config,
+                    Guid.NewGuid().ToString(),
+                    this,
+                    TestHooks,
+                    _redactor,
+                    _typeTranscoder,
+                    loggerFactory
                 );
 
-            await transactionLogic(ctx).CAF();
-            attempts.Add(attempt);
+                // TODO: capture exception.
+                try
+                {
+                    await transactionLogic(ctx).CAF();
+                    await ctx.AutoCommit().CAF();
+                    var attempt = ctx.ToAttempt();
+                    attempts.Add(attempt);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    var errAttempt = ctx.ToAttempt();
+                    errAttempt.TermindatedByException = ex;
+                    attempts.Add(errAttempt);
+                }
+            }
 
             return result;
         }
