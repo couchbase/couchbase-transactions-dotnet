@@ -179,9 +179,8 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
 
                 Assert.NotEmpty(result.Attempts);
                 _outputHelper.WriteLine(string.Join(",", result.Attempts));
-                // TODO: where is the state actually supposed to be set to ROLLED_BACK?
                 Assert.Contains(result.Attempts,
-                    ta => ta.FinalState == AttemptStates.ABORTED || ta.FinalState == AttemptStates.ROLLED_BACK);
+                    ta => ta.FinalState == AttemptStates.ROLLED_BACK);
 
                 var postTxnGetResult = await defaultCollection.GetAsync(docId);
                 var postTxnDoc = postTxnGetResult.ContentAs<dynamic>();

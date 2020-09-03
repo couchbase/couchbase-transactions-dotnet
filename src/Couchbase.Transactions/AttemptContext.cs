@@ -28,6 +28,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using static Couchbase.Transactions.Error.ErrorBuilder;
+using Exception = System.Exception;
 
 namespace Couchbase.Transactions
 {
@@ -786,6 +787,10 @@ Else -> Error(ec, err)
                     MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldDocsRemoved}", removes, isXattr: true),
                 };
 
+                var mutateInResult = await _atrCollection
+                    .MutateInAsync(_atrId, specs, opts => opts.StoreSemantics(StoreSemantics.Replace)).CAF();
+
+
                 await _testHooks.AfterAtrAborted(this).CAF();
                 _state = AttemptStates.ABORTED;
             }
@@ -801,6 +806,42 @@ Else -> Error(ec, err)
                    Else FAIL_HARD -> Error(ec, err, rollback=false)
                    Else -> Default current logic is that rollback will continue in the event of failures until expiry. Retry operation, after waiting OpRetryBackoff. Takes care of FAIL_AMBIGUOUS.
                  *
+                 */
+                throw;
+            }
+        }
+
+        private async Task SetAtrRolledBack()
+        {
+            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#SetATRRolledBack
+            try
+            {
+                CheckExpiry();
+                await _testHooks.BeforeAtrRolledBack(this).CAF();
+                var prefix = $"attempts.{_attemptId}";
+
+                var specs = new MutateInSpec[]
+                {
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStatus}", AttemptStates.ROLLED_BACK.ToString(), isXattr: true),
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldTimestampRollbackComplete}", MutationMacro.Cas),
+                };
+
+                var mutateInResult = await _atrCollection
+                    .MutateInAsync(_atrId, specs, opts => opts.StoreSemantics(StoreSemantics.Replace)).CAF();
+
+                await _testHooks.AfterAtrRolledBack(this).CAF();
+                _state = AttemptStates.ROLLED_BACK;
+            }
+            catch (Exception)
+            {
+                /*
+                 * On error err (from any of the preceding items in this section), classify as error class ec then:
+                   If in ExpiryOvertimeMode -> Error(FAIL_EXPIRY, cause=AttemptExpired(err), rollback=false, raise=TRANSACTION_EXPIRED)
+                   Else if FAIL_EXPIRY -> set ExpiryOvertimeMode and retry operation, after waiting OpRetryBackoff. We want to make one further attempt to complete the rollback.
+                   Else FAIL_PATH_NOT_FOUND -> Perhaps, the cleanup process has removed the entry, as it was expired (though this is unlikely). Continue as though success.
+                   Else FAIL_DOC_NOT_FOUND -> The ATR has been deleted, or we’re trying to rollback an attempt that failed to create a new ATR. Neither should happen, so bailout. Error(ec, cause=ActiveTransactionRecordNotFound, rollback=false)
+                   Else FAIL_HARD -> Error(ec, err, rollback=false)
+                   Else -> Default current logic is that rollback will continue in the event of failures until expiry. Retry operation, after waiting OpRetryBackoff. Takes care of FAIL_AMBIGUOUS.
                  */
                 throw;
             }
@@ -864,7 +905,7 @@ Else -> Error(ec, err)
                 }
             }
 
-            // TODO:  SetAtrRolledBack?  Spec doesn't say.
+            await SetAtrRolledBack().CAF();
         }
 
         private async Task RollbackStagedInsert(StagedMutation sm)
