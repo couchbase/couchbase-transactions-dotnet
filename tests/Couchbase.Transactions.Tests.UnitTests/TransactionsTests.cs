@@ -27,31 +27,6 @@ namespace Couchbase.Transactions.Tests.UnitTests
             _outputHelper = outputHelper;
         }
 
-        ////[Fact]
-        ////public async Task Run_Basic_Get()
-        ////{
-        ////    var mockDocs = new List<ObjectGetResult>()
-        ////    {
-        ////        new ObjectGetResult("found-id", new object())
-        ////    };
-
-        ////    using var cluster = CreateTestCluster(mockDocs);
-        ////    using var transactions = Transactions.Create(cluster);
-        ////    var reachedEnd = false;
-        ////    var transactionResult = await transactions.Run(async ctx =>
-        ////    {
-        ////        var bucket = await cluster.BucketAsync("test-bucket").ConfigureAwait(false);
-        ////        var collection = bucket.DefaultCollection();
-        ////        var notFoundDoc = await ctx.GetOptional(collection, "notFound-id").ConfigureAwait(false);
-        ////        Assert.Null(notFoundDoc);
-        ////        reachedEnd = true;
-        ////    });
-
-        ////    Assert.True(reachedEnd);
-        ////    Assert.NotNull(transactionResult);
-        ////    Assert.NotEmpty(transactionResult.Attempts);
-        ////}
-
         [Fact]
         public async Task Canonical_Example_Compiles()
         {
@@ -64,13 +39,6 @@ namespace Couchbase.Transactions.Tests.UnitTests
                 _outputHelper.WriteLine($"{nameof(Canonical_Example_Compiles)}: Unhandled Exception: {e.ToString()}");
             }
         }
-
-        ////[Fact]
-        ////public async Task Canonical_Example_Runs_To_End_Without_Throwing()
-        ////{
-        ////    var ranToEnd = await CanonicalExample();
-        ////    Assert.True(ranToEnd);
-        ////}
 
         private async Task<bool> CanonicalExample()
         {

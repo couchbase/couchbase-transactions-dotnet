@@ -83,6 +83,7 @@ namespace Couchbase.Transactions
             result.Attempts = attempts;
 
             // TODO: retry according to spec
+            bool succeeded = false;
             for (int i = 0; i < 3; i++)
             {
                 var ctx = new AttemptContext(
@@ -103,6 +104,7 @@ namespace Couchbase.Transactions
                     await ctx.AutoCommit().CAF();
                     var attempt = ctx.ToAttempt();
                     attempts.Add(attempt);
+                    succeeded = true;
                     break;
                 }
                 catch (Exception ex)
@@ -110,6 +112,7 @@ namespace Couchbase.Transactions
                     var errAttempt = ctx.ToAttempt();
                     errAttempt.TermindatedByException = ex;
                     attempts.Add(errAttempt);
+                    // TODO: check if exception needs auto-rollback.
                 }
             }
 

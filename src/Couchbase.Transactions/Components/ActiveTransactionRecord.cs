@@ -68,28 +68,8 @@ namespace Couchbase.Transactions.Components
             _ = entry ?? throw new ArgumentNullException(nameof(entry));
             _ = attemptId ?? throw new ArgumentNullException(nameof(attemptId));
             _ = transactionId ?? throw new ArgumentNullException(nameof(transactionId));
-            ////var entryState = entry.Value<string>(TransactionFields.AtrFieldStatus);
-            ////var state = Enum.Parse<AttemptStates>(entryState);
 
             return entry.ToObject<AtrEntry>();
-
-            ////return new AtrEntry(
-            ////    bucketName,
-            ////    atrId, 
-            ////    attemptId,
-            ////    transactionId,
-            ////    state,
-            ////    ParseMutationCasField(entry, TransactionFields.AtrFieldStartTimestamp),
-            ////    ParseMutationCasField(entry, TransactionFields.AtrFieldStartCommit),
-            ////    ParseMutationCasField(entry, TransactionFields.AtrFieldTimestampComplete),
-            ////    ParseMutationCasField(entry, TransactionFields.AtrFieldTimestampRollbackStart),
-            ////    ParseMutationCasField(entry, TransactionFields.AtrFieldTimestampRollbackComplete),
-            ////    entry.Value<int?>(TransactionFields.AtrFieldExpiresAfterMsecs),
-            ////    ProcessDocumentIdArray(entry, TransactionFields.AtrFieldDocsInserted),
-            ////    ProcessDocumentIdArray(entry, TransactionFields.AtrFieldDocsReplaced),
-            ////    ProcessDocumentIdArray(entry, TransactionFields.AtrFieldDocsRemoved),
-            ////    cas
-            ////);
         }
 
         internal static DateTimeOffset? ParseMutationCasField(JToken entry, string fieldName)
