@@ -15,8 +15,10 @@ using Couchbase.Core.IO.Transcoders;
 using Couchbase.Core.Logging;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.ActiveTransactionRecords;
+using Couchbase.Transactions.Components;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.Error;
+using Couchbase.Transactions.Error.Attempts;
 using Couchbase.Transactions.Error.Internal;
 using Couchbase.Transactions.Internal.Test;
 using Couchbase.Transactions.Log;
@@ -26,6 +28,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using static Couchbase.Transactions.Error.ErrorBuilder;
+using Exception = System.Exception;
 
 namespace Couchbase.Transactions
 {
@@ -35,43 +38,44 @@ namespace Couchbase.Transactions
         private readonly TransactionConfig _config;
         private readonly Transactions _parent;
         private readonly ITestHooks _testHooks;
-        private readonly IRedactor _redactor;
+        internal IRedactor Redactor { get; }
         private readonly ITypeTranscoder _transcoder;
-        private AttemptStates _state = AttemptStates.NothingWritten;
+        private AttemptStates _state = AttemptStates.NOTHING_WRITTEN;
 
-        // TODO:  Should this be a Dictionary keyed on bucket::scope::collection::id?
         private List<StagedMutation> _stagedMutations = new List<StagedMutation>();
         private readonly string _attemptId;
 
-        private object _initAtrLock = new object();
-        private string _atrId = null;
-        private string _atrBucketName = null;
-        private string _atrCollectionName = null;
-        private string _atrScopeName = null;
-        private string _atrLongCollectionName = null;
+        private readonly object _initAtrLock = new object();
+        private string? _atrId = null;
+        private string? _atrBucketName = null;
+        private string? _atrCollectionName = null;
+        private string? _atrScopeName = null;
+        private string? _atrLongCollectionName = null;
         private readonly DurabilityLevel _effectiveDurabilityLevel;
-        private readonly Dictionary<string, MutationToken> _finalMutations = new Dictionary<string, MutationToken>();
-        private ICouchbaseCollection _atrCollection;
+        private readonly List<MutationToken> _finalMutations = new List<MutationToken>();
+        private ICouchbaseCollection? _atrCollection;
 
         internal AttemptContext(TransactionContext overallContext,
             TransactionConfig config,
             string attemptId,
             Transactions parent,
-            ITestHooks testHooks,
+            ITestHooks? testHooks,
             IRedactor redactor,
-            ITypeTranscoder transcoder)
+            ITypeTranscoder transcoder,
+            Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
         {
-            _attemptId = attemptId;
-            _overallContext = overallContext;
-            _config = config;
-            _parent = parent;
-            _testHooks = testHooks;
-            _redactor = redactor;
-            _transcoder = transcoder;
+            _attemptId = attemptId ?? throw new ArgumentNullException(nameof(attemptId));
+            _overallContext = overallContext ?? throw new ArgumentNullException(nameof(overallContext));
+            _config = config ?? throw new ArgumentNullException(nameof(config));
+            _parent = parent ?? throw new ArgumentNullException(nameof(parent));
+            _testHooks = testHooks ?? DefaultTestHooks.Instance;
+            Redactor = redactor ?? throw new ArgumentNullException(nameof(redactor));
+            _transcoder = transcoder ?? throw new ArgumentNullException(nameof(transcoder));
             _effectiveDurabilityLevel = _overallContext.PerConfig?.DurabilityLevel ?? config.DurabilityLevel;
+            Logger = loggerFactory?.CreateLogger<AttemptContext>();
         }
 
-        public ILogger<AttemptContext> Logger { get; }
+        public ILogger<AttemptContext>? Logger { get; }
 
         public async Task<TransactionGetResult?> GetOptional(ICouchbaseCollection collection, string id)
         {
@@ -82,7 +86,7 @@ namespace Couchbase.Transactions
             }
             catch (DocumentNotFoundException)
             {
-                Logger?.LogInformation("Document '{id}' not found in collection '{collection.Name}'", _redactor.UserData(id), _redactor.UserData(collection));
+                Logger?.LogInformation("Document '{id}' not found in collection '{collection.Name}'", Redactor.UserData(id), Redactor.UserData(collection));
                 return null;
             }
         }
@@ -99,12 +103,12 @@ namespace Couchbase.Transactions
                     case StagedMutationType.Insert:
                     case StagedMutationType.Replace:
                         // LOGGER.info(attemptId, "found own-write of mutated doc %s", RedactableArgument.redactUser(id));
-                        return TransactionGetResult.FromOther(staged.Doc, staged.Content, TransactionJsonDocumentStatus.OwnWrite);
+                        return TransactionGetResult.FromOther(staged.Doc, staged.Content ?? Array.Empty<byte>(), TransactionJsonDocumentStatus.OwnWrite);
                     case StagedMutationType.Remove:
                         // LOGGER.info(attemptId, "found own-write of removed doc %s", RedactableArgument.redactUser(id));
                         return null;
                     default:
-                        throw new InvalidOperationException($"Document '{_redactor.UserData(id)}' was staged with type {staged.Type}");
+                        throw new InvalidOperationException($"Document '{Redactor.UserData(id)}' was staged with type {staged.Type}");
                 }
             }
 
@@ -213,13 +217,18 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
             CheckExpiry();
             CheckWriteWriteConflict(doc);
             InitAtrIfNeeded(doc.Collection, doc.Id);
-            if (_stagedMutations.Count == 0)
-            {
-                var setAtrPendingResult = await SetAtrPending(doc.Collection);
-            }
+            await SetAtrPendingIfFirstMutation(doc.Collection);
 
             // TODO: re-evaluate accessDeleted after CreateAsDeleted is implemented.
             return await CreateStagedReplace(doc, content, accessDeleted:false);
+        }
+
+        private async Task SetAtrPendingIfFirstMutation(ICouchbaseCollection collection)
+        {
+            if (_stagedMutations.Count == 0)
+            {
+                var setAtrPendingResult = await SetAtrPending(collection);
+            }
         }
 
         private async Task<TransactionGetResult> CreateStagedReplace(TransactionGetResult doc, object content, bool accessDeleted)
@@ -286,10 +295,10 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
                     contentBytes,
                     _overallContext.TransactionId,
                     _attemptId,
-                    _atrId,
-                    _atrBucketName,
-                    _atrScopeName,
-                    _atrCollectionName,
+                    _atrId!,
+                    _atrBucketName!,
+                    _atrScopeName!,
+                    _atrCollectionName!,
                     updatedDoc,
                     _transcoder);
             }
@@ -321,10 +330,7 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
             DoneCheck();
             CheckExpiry();
             InitAtrIfNeeded(collection, id);
-            if (_stagedMutations.Count == 0)
-            {
-                var setAtrPendingResult = await SetAtrPending(collection);
-            }
+            await SetAtrPendingIfFirstMutation(collection);
 
             // If this document already exists in StagedMutation, raise Error(FAIL_OTHER, cause=IllegalStateException [or platform-specific equivalent]). 
             if (_stagedMutations.Any(sm => sm.Doc.Id == id))
@@ -373,10 +379,10 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
                     contentBytes,
                     _overallContext.TransactionId,
                     _attemptId,
-                    _atrId,
-                    _atrBucketName,
-                    _atrScopeName,
-                    _atrCollectionName,
+                    _atrId!,
+                    _atrBucketName!,
+                    _atrScopeName!,
+                    _atrCollectionName!,
                     mutateResult,
                     _transcoder);
 
@@ -399,6 +405,13 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
             }
         }
 
+        private IEnumerable<StagedMutation> StagedInserts  =>
+            _stagedMutations.Where(sm => sm.Type == StagedMutationType.Insert);
+
+        private IEnumerable<StagedMutation> StagedReplaces => _stagedMutations.Where(sm => sm.Type == StagedMutationType.Replace);
+        private IEnumerable<StagedMutation> StagedRemoves => _stagedMutations.Where(sm => sm.Type == StagedMutationType.Remove);
+
+
         private async Task<IMutateInResult> SetAtrPending(ICouchbaseCollection collection)
         {
             _atrId = _atrId ?? throw new InvalidOperationException("atrId is not present");
@@ -418,7 +431,7 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
                 var mutateInResult = await collection.MutateInAsync(_atrId, specs =>
                         specs.Insert($"{prefix}.{TransactionFields.AtrFieldTransactionId}", _overallContext.TransactionId,
                                 createPath: true, isXattr: true)
-                            .Insert($"{prefix}.{TransactionFields.AtrFieldStatus}", AttemptStates.Pending.FullName(), createPath: false, isXattr: true)
+                            .Insert($"{prefix}.{TransactionFields.AtrFieldStatus}", AttemptStates.PENDING.ToString(), createPath: false, isXattr: true)
                             .Insert($"{prefix}.{TransactionFields.AtrFieldStartTimestamp}", MutationMacro.Cas)
                             .Insert($"{prefix}.{TransactionFields.AtrFieldExpiresAfterMsecs}", exp, createPath: false, isXattr: true),
                     opts => opts.StoreSemantics(StoreSemantics.Upsert)
@@ -430,6 +443,7 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
                 var getResult = await collection.GetAsync(_atrId).CAF();
                 var atr = getResult.ContentAs<dynamic>();
                 await _testHooks.AfterAtrPending(this);
+                _state = AttemptStates.PENDING;
                 return mutateInResult;
             }
             catch (Exception e)
@@ -453,10 +467,8 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
             DoneCheck();
             CheckExpiry();
             CheckWriteWriteConflict(doc);
-            if (_stagedMutations.Count == 0)
-            {
-                var setAtrPendingResult = await SetAtrPending(doc.Collection);
-            }
+            InitAtrIfNeeded(doc.Collection, doc.Id);
+            await SetAtrPendingIfFirstMutation(doc.Collection);
 
             await CreateStagedRemove(doc);
         }
@@ -505,10 +517,10 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
                     // However this is hard in practice.  If we remove from stagedInsert and add to
                     // stagedRemove then commit will work fine, but rollback will not remove the doc.
                     // So, fast fail this scenario.
-                    throw new InvalidOperationException($"doc {_redactor.UserData(doc.Id)} is being removed after being inserted in the same txn.");
+                    throw new InvalidOperationException($"doc {Redactor.UserData(doc.Id)} is being removed after being inserted in the same txn.");
                 }
 
-                var stagedRemove = new StagedMutation(doc, null, StagedMutationType.Remove, updatedDoc);
+                var stagedRemove = new StagedMutation(doc, ActiveTransactionRecord.RemovePlaceholderBytes, StagedMutationType.Remove, updatedDoc);
                 _stagedMutations.Add(stagedRemove);
             }
             catch (Exception e)
@@ -518,6 +530,16 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
             }
         }
 
+        internal async Task AutoCommit()
+        {
+            switch (_state)
+            {
+                case AttemptStates.NOTHING_WRITTEN:
+                case AttemptStates.PENDING:
+                    await Commit().CAF();
+                    break;
+            }
+        }
         public async Task Commit()
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Commit
@@ -555,15 +577,15 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
                 var prefix = $"attempts.{_attemptId}";
                 var specs = new MutateInSpec[]
                 {
-                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStatus}", AttemptStates.Completed.FullName(), isXattr: true),
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStatus}", AttemptStates.COMPLETED.ToString(), isXattr: true),
                     MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldTimestampComplete}", MutationMacro.Cas)
                 };
 
-                var mutateResult = await _atrCollection
-                    .MutateInAsync(_atrId, specs, opts => opts.StoreSemantics(StoreSemantics.Replace)).CAF();
+                var mutateResult = await _atrCollection!
+                    .MutateInAsync(_atrId!, specs, opts => opts.StoreSemantics(StoreSemantics.Replace)).CAF();
 
                 await _testHooks.AfterAtrComplete(this).CAF();
-                _state = AttemptStates.Completed;
+                _state = AttemptStates.COMPLETED;
             }
             catch (Exception e)
             {
@@ -578,7 +600,7 @@ A FAIL_AMBIGUOUS could leave the ATR state as COMPLETED but the in-memory state 
                 throw;
             }
         }
-
+        
         private async Task UnstageDocs()
         {
             foreach (var sm in _stagedMutations)
@@ -604,40 +626,37 @@ A FAIL_AMBIGUOUS could leave the ATR state as COMPLETED but the in-memory state 
         private async Task UnstageRemove(StagedMutation sm, bool ambiguityResolutionMode)
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Unstaging-Removes
-            await _testHooks.BeforeDocRemoved(this, sm.Doc.Id);
-            if (_overallContext.IsExpired)
-            {
-                // TODO: set ExpirationOverTimeMode
-            }
-
             try
             {
-
+                await _testHooks.BeforeDocRemoved(this, sm.Doc.Id).CAF();
+                CheckExpiry();
+                await sm.Doc.Collection.RemoveAsync(sm.Doc.Id);
+                await _testHooks.AfterDocRemovedPreRetry(this, sm.Doc.Id).CAF();
             }
             catch (Exception e)
             {
                 /*
                  * On error err (from any of the preceding items in this section), classify as error class ec then:
-If in ExpiryOvertimeMode -> Error(ec, AttemptExpired(err), rollback=false, raise=TRANSACTION_FAILED_POST_COMMIT)
-Else FAIL_AMBIGUOUS -> Retry this section from the top, after OpRetryDelay, with ambiguityResolutionMode=true.
-Else FAIL_DOC_NOT_FOUND -> Doc was removed in-between stage and unstaging.
-Either we are in in ambiguityResolutionMode mode, and our second attempt found that the first attempt was successful. Or, another actor has removed the document. Either way, we cannot continue as the returned mutationTokens won’t contain this removal. Raise Error(ec, err, rollback=false, raise=TRANSACTION_FAILED_POST_COMMIT).
-Note: The ambiguityResolutionMode logic is redundant currently. But we may have better handling for this in the future, e.g. a mode where the application can specify that mutationTokens isn’t important for this transaction.
-Else FAIL_HARD -> Error(ec, err, rollback=false)
-Else -> Raise Error(ec, cause=err, rollback=false, raise=TRANSACTION_FAILED_POST_COMMIT). This will result in success being return to the application, but result.unstagingCompleted() will be false. See “Unstaging Inserts & Replaces” for the logic behind this.
+                   If in ExpiryOvertimeMode -> Error(ec, AttemptExpired(err), rollback=false, raise=TRANSACTION_FAILED_POST_COMMIT)
+                   Else FAIL_AMBIGUOUS -> Retry this section from the top, after OpRetryDelay, with ambiguityResolutionMode=true.
+                   Else FAIL_DOC_NOT_FOUND -> Doc was removed in-between stage and unstaging.
+                   Either we are in in ambiguityResolutionMode mode, and our second attempt found that the first attempt was successful. Or, another actor has removed the document. Either way, we cannot continue as the returned mutationTokens won’t contain this removal. Raise Error(ec, err, rollback=false, raise=TRANSACTION_FAILED_POST_COMMIT).
+                   Note: The ambiguityResolutionMode logic is redundant currently. But we may have better handling for this in the future, e.g. a mode where the application can specify that mutationTokens isn’t important for this transaction.
+                   Else FAIL_HARD -> Error(ec, err, rollback=false)
+                   Else -> Raise Error(ec, cause=err, rollback=false, raise=TRANSACTION_FAILED_POST_COMMIT). This will result in success being return to the application, but result.unstagingCompleted() will be false. See “Unstaging Inserts & Replaces” for the logic behind this.
                  */
                 throw;
             }
+
+            _finalMutations.Add(sm.MutationResult.MutationToken);
+            await _testHooks.AfterDocRemovedPostRetry(this, sm.Doc.Id).CAF();
         }
 
         private async Task UnstageMutation(StagedMutation sm, bool casZeroMode = false, bool insertMode = false, bool ambiguityResolutionMode = false)
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Unstaging-Inserts-and-Replaces-Protocol-20-version
             await _testHooks.BeforeDocCommitted(this, sm.Doc.Id).CAF();
-            if (_overallContext.IsExpired)
-            {
-                // TODO: set ExpirationOverTimeMode
-            }
+            CheckExpiry();
 
             try
             {
@@ -648,12 +667,14 @@ Else -> Raise Error(ec, cause=err, rollback=false, raise=TRANSACTION_FAILED_POST
                 }
                 else
                 {
+                    var finalDoc = _transcoder.Serializer.Deserialize<JObject>(sm.Content);
                     mutateResult = await sm.Doc.Collection.MutateInAsync(sm.Doc.Id, specs =>
                                 specs
+                                    // NCBC-2639
                                     ////.Upsert(TransactionFields.TransactionInterfacePrefixOnly, (string?)null,
                                     ////    isXattr: true)
                                     .Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
-                                    .SetDoc(sm.Content),
+                                    .SetDoc(finalDoc),
                             opts => opts.Cas( casZeroMode ? 0 : sm.Doc.Cas))
                         .CAF();
 
@@ -661,8 +682,7 @@ Else -> Raise Error(ec, cause=err, rollback=false, raise=TRANSACTION_FAILED_POST
 
                 if (mutateResult?.MutationToken != null)
                 {
-                    // TODO: the java client uses the doc.id, here, but is that sufficient?  Can't we have multiple docs with the same id from different collections?
-                    _finalMutations.Add(sm.Doc.Id, mutateResult.MutationToken);
+                    _finalMutations.Add(mutateResult.MutationToken);
                 }
 
                 await _testHooks.AfterDocCommittedBeforeSavingCas(this, sm.Doc.Id);
@@ -699,16 +719,13 @@ The transaction is conceptually committed but unstaging could not complete. Sinc
                 CheckExpiry();
                 await _testHooks.BeforeAtrCommit(this).CAF();
                 var prefix = $"attempts.{_attemptId}";
-                var stagedInserts = _stagedMutations.Where(sm => sm.Type == StagedMutationType.Insert);
-                var stagedReplaces = _stagedMutations.Where(sm => sm.Type == StagedMutationType.Replace);
-                var stagedRemoves = _stagedMutations.Where(sm => sm.Type == StagedMutationType.Remove);
 
-                var inserts = new JArray(stagedInserts.Select(sm => sm.ForAtr()));
-                var replaces = new JArray(stagedReplaces.Select(sm => sm.ForAtr()));
-                var removes = new JArray(stagedRemoves.Select(sm => sm.ForAtr()));
+                var inserts = new JArray(StagedInserts.Select(sm => sm.ForAtr()));
+                var replaces = new JArray(StagedReplaces.Select(sm => sm.ForAtr()));
+                var removes = new JArray(StagedRemoves.Select(sm => sm.ForAtr()));
                 var specs = new MutateInSpec[]
                 { 
-                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStatus}", AttemptStates.Committed.FullName(), isXattr: true),
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStatus}", AttemptStates.COMMITTED.ToString(), isXattr: true),
                     MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStartCommit}", MutationMacro.Cas), 
                     MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldDocsInserted}", inserts, isXattr: true),
                     MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldDocsReplaced}", replaces, isXattr: true),
@@ -721,7 +738,7 @@ The transaction is conceptually committed but unstaging could not complete. Sinc
                     .MutateInAsync(_atrId, specs, opts => opts.StoreSemantics(StoreSemantics.Replace)).CAF();
 
                 await _testHooks.AfterAtrCommit(this).CAF();
-                _state = AttemptStates.Committed;
+                _state = AttemptStates.COMMITTED;
             }
             catch (Exception e)
             {
@@ -747,10 +764,213 @@ Else -> Error(ec, err)
             }
         }
 
-        public Task Rollback() => throw new NotImplementedException();
+        private async Task SetAtrAborted(bool isAppRollback)
+        {
+            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#SetATRAborted
+            try
+            {
+                // TODO: handle ExpirationOvertimeMode
+                CheckExpiry();
+
+                await _testHooks.BeforeAtrAborted(this).CAF();
+                var prefix = $"attempts.{_attemptId}";
+
+                var inserts = new JArray(StagedInserts.Select(sm => sm.ForAtr()));
+                var replaces = new JArray(StagedReplaces.Select(sm => sm.ForAtr()));
+                var removes = new JArray(StagedRemoves.Select(sm => sm.ForAtr()));
+                var specs = new MutateInSpec[]
+                {
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStatus}", AttemptStates.ABORTED.ToString(), isXattr: true),
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldTimestampRollbackStart}", MutationMacro.Cas),
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldDocsInserted}", inserts, isXattr: true),
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldDocsReplaced}", replaces, isXattr: true),
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldDocsRemoved}", removes, isXattr: true),
+                };
+
+                var mutateInResult = await _atrCollection
+                    .MutateInAsync(_atrId, specs, opts => opts.StoreSemantics(StoreSemantics.Replace)).CAF();
+
+
+                await _testHooks.AfterAtrAborted(this).CAF();
+                _state = AttemptStates.ABORTED;
+            }
+            catch (Exception)
+            {
+                /*
+                On error err (from any of the preceding items in this section), classify as error class ec then:
+                   If in ExpiryOvertimeMode -> Error(ec, cause=AttemptExpired(err), rollback=false, raise=TRANSACTION_EXPIRED)
+                   Else if FAIL_EXPIRY -> set ExpiryOvertimeMode and retry operation, after waiting OpRetryBackoff. We want to make one further attempt to complete the rollback.
+                   Else FAIL_PATH_NOT_FOUND -> Perhaps we’re trying to rollback an ATR entry after failing trying to create it. Perhaps, the cleanup process has removed the entry, as it was expired. Neither of these should happen, so we should bailout as we’re now in a strange state. Error(ec, cause=ActiveTransactionRecordEntryNotFound, rollback=false)
+                   Else FAIL_DOC_NOT_FOUND -> The ATR has been deleted, or we’re trying to rollback an attempt that failed to create a new ATR. Neither should happen, so bailout. Error(ec, cause=ActiveTransactionRecordNotFound, rollback=false)
+                   Else FAIL_ATR_FULL -> Bailout to reduce pressure on ATRs. Error(ec, cause=ActiveTransactionRecordFull, rollback=false)
+                   Else FAIL_HARD -> Error(ec, err, rollback=false)
+                   Else -> Default current logic is that rollback will continue in the event of failures until expiry. Retry operation, after waiting OpRetryBackoff. Takes care of FAIL_AMBIGUOUS.
+                 *
+                 */
+                throw;
+            }
+        }
+
+        private async Task SetAtrRolledBack()
+        {
+            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#SetATRRolledBack
+            try
+            {
+                CheckExpiry();
+                await _testHooks.BeforeAtrRolledBack(this).CAF();
+                var prefix = $"attempts.{_attemptId}";
+
+                var specs = new MutateInSpec[]
+                {
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStatus}", AttemptStates.ROLLED_BACK.ToString(), isXattr: true),
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldTimestampRollbackComplete}", MutationMacro.Cas),
+                };
+
+                var mutateInResult = await _atrCollection
+                    .MutateInAsync(_atrId, specs, opts => opts.StoreSemantics(StoreSemantics.Replace)).CAF();
+
+                await _testHooks.AfterAtrRolledBack(this).CAF();
+                _state = AttemptStates.ROLLED_BACK;
+            }
+            catch (Exception)
+            {
+                /*
+                 * On error err (from any of the preceding items in this section), classify as error class ec then:
+                   If in ExpiryOvertimeMode -> Error(FAIL_EXPIRY, cause=AttemptExpired(err), rollback=false, raise=TRANSACTION_EXPIRED)
+                   Else if FAIL_EXPIRY -> set ExpiryOvertimeMode and retry operation, after waiting OpRetryBackoff. We want to make one further attempt to complete the rollback.
+                   Else FAIL_PATH_NOT_FOUND -> Perhaps, the cleanup process has removed the entry, as it was expired (though this is unlikely). Continue as though success.
+                   Else FAIL_DOC_NOT_FOUND -> The ATR has been deleted, or we’re trying to rollback an attempt that failed to create a new ATR. Neither should happen, so bailout. Error(ec, cause=ActiveTransactionRecordNotFound, rollback=false)
+                   Else FAIL_HARD -> Error(ec, err, rollback=false)
+                   Else -> Default current logic is that rollback will continue in the event of failures until expiry. Retry operation, after waiting OpRetryBackoff. Takes care of FAIL_AMBIGUOUS.
+                 */
+                throw;
+            }
+        }
+
+        public Task Rollback() => this.RollbackInternal(true);
+
         public Task Defer() => throw new NotImplementedException();
 
-        protected bool IsDone => _state != AttemptStates.NothingWritten && _state != AttemptStates.Pending;
+        internal TransactionAttempt ToAttempt()
+        {
+            var ta = new TransactionAttempt()
+            {
+                AttemptId = _attemptId,
+                AtrCollection = _atrCollection,
+                AtrId = _atrId,
+                FinalState = _state,
+                MutationTokens = _finalMutations.ToArray(),
+                StagedInsertedIds = StagedInserts.Select(sm => sm.Doc.Id).ToArray(),
+                StagedRemoveIds = StagedRemoves.Select(sm => sm.Doc.Id).ToArray(),
+                StagedReplaceIds = StagedReplaces.Select(sm => sm.Doc.Id).ToArray()
+            };
+
+            return ta;
+        }
+
+        protected bool IsDone => _state != AttemptStates.NOTHING_WRITTEN && _state != AttemptStates.PENDING;
+
+        protected async Task RollbackInternal(bool isAppRollback)
+        {
+            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#rollbackInternal
+            CheckExpiry();
+            if (_state == AttemptStates.NOTHING_WRITTEN)
+            {
+                return;
+            }
+
+            if (_state == AttemptStates.COMMITTED
+            || _state == AttemptStates.COMPLETED
+            || _state == AttemptStates.ROLLED_BACK)
+            {
+                // TODO: Check ErrorClass vs. Java impl.
+                throw ErrorBuilder.CreateError(this, ErrorClass.FailOther).DoNotRollbackAttempt().Build();
+            }
+
+            await SetAtrAborted(isAppRollback).CAF();
+            foreach (var sm in _stagedMutations)
+            {
+                switch (sm.Type)
+                {
+                    case StagedMutationType.Insert:
+                        await RollbackStagedInsert(sm).CAF();
+                        break;
+                    case StagedMutationType.Remove:
+                    case StagedMutationType.Replace:
+                        await RollbackStagedReplaceOrRemove(sm).CAF();
+                        break;
+                    default:
+                        throw new InvalidOperationException(sm.Type + " is not a supported mutation type for rollback.");
+                    
+                }
+            }
+
+            await SetAtrRolledBack().CAF();
+        }
+
+        private async Task RollbackStagedInsert(StagedMutation sm)
+        {
+            https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#Rollback-Staged-Insert
+            try
+            {
+                CheckExpiry();
+                await _testHooks.BeforeRollbackDeleteInserted(this, sm.Doc.Id).CAF();
+                var mutateInResult = sm.Doc.Collection.MutateInAsync(sm.Doc.Id, specs =>
+                    specs
+                        // NCBC-2639
+                        ////.Upsert(TransactionFields.TransactionInterfacePrefixOnly, (string?)null,
+                        ////    isXattr: true)
+                        .Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)).CAF();
+
+                await _testHooks.AfterRollbackDeleteInserted(this, sm.Doc.Id).CAF();
+            }
+            catch (Exception)
+            {
+                /*
+                 * On error err (from any of the preceding items in this section), classify as error class ec then:
+                   If ExpiryOvertimeMode -> time to bailout. RaiseError(ec, AttemptExpired(err), raise=TRANSACTION_EXPIRED).
+                   Else FAIL_EXPIRY -> Set ExpiryOvertimeMode and retry operation, after waiting OpRetryBackoff.
+                   Else FAIL_DOC_NOT_FOUND -> Possibly we retried the op on FAIL_AMBIGUOUS and that op had succeeded. Perhaps something odd has happened and async cleanup has rolled back this doc while we’ve been trying to. Either way, our work on this document is done. Continue as success.
+                   Protocol 2.0 version:
+                   Else FAIL_PATH_NOT_FOUND -> same logic as FAIL_DOC_NOT_FOUND for same reason.
+                   Else FAIL_CAS_MISMATCH -> Either the co-operative model has been broken, or we’re retrying on a previous FAIL_AMBIGUOUS that actually succeeded. We could resolve the ambiguity here, but it’s somewhat expensive (would require reading the doc), and it’s only rollback cleanup. So instead bailout and leave it for the cleanup process Error(ec, err, rollback=false)
+                   Else FAIL_HARD -> Error(ec, err, rollback=false)
+                   Else -> Default current logic is that rollback will continue in the event of failures until expiry. Retry operation, after waiting OpRetryBackoff.
+                 */
+                throw;
+            }
+        }
+
+        private async Task RollbackStagedReplaceOrRemove(StagedMutation sm)
+        {
+            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#Rollback-Staged-Replace-or-Remove
+            try
+            {
+                CheckExpiry();
+                await _testHooks.BeforeDocRolledBack(this, sm.Doc.Id).CAF();
+                var mutateInResult = sm.Doc.Collection.MutateInAsync(sm.Doc.Id, specs =>
+                    specs
+                        // NCBC-2639
+                        ////.Upsert(TransactionFields.TransactionInterfacePrefixOnly, (string?)null,
+                        ////    isXattr: true)
+                        .Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)).CAF();
+                await _testHooks.AfterRollbackReplaceOrRemove(this, sm.Doc.Id).CAF();
+            }
+            catch (Exception)
+            {
+                /*
+                 * On error err (from any of the preceding items in this section), classify as error class ec then:
+                   If ExpiryOvertimeMode -> time to bailout. RaiseError(ec, AttemptExpired(err), raise=TRANSACTION_EXPIRED).
+                   Else FAIL_EXPIRY -> Set ExpiryOvertimeMode and retry operation, after waiting OpRetryBackoff.
+                   Else FAIL_PATH_NOT_FOUND -> The transactional metadata already doesn’t exist. Possibly we retried the op on FAIL_AMBIGUOUS and that op had succeeded. Perhaps something odd has happened and async cleanup has rolled back this doc while we’ve been trying to. Either way, our work on this document is done. Continue as success.
+                   Else FAIL_DOC_NOT_FOUND -> Should not happen, likely means the co-operative model has been broken. But as it’s rollback and no mutations are going to lost, do not raise an event. Error(ec, err, rollback=false)
+                   Protocol 2.0: Else FAIL_CAS_MISMATCH -> Either the co-operative model has been broken, or we’re retrying on a previous FAIL_AMBIGUOUS that actually succeeded. We could resolve the ambiguity here, but it’s somewhat expensive (would require reading the doc), and it’s only rollback cleanup. So instead bailout and leave it for the cleanup process Error(ec, err, rollback=false)
+                   Else FAIL_HARD -> Error(ec, err, rollback=false)
+                   Else -> Default current logic is that rollback will continue in the event of failures until expiry. Retry operation, after waiting OpRetryBackoff.
+                 */
+                throw;
+            }
+        }
 
         protected void DoneCheck()
         {
@@ -802,19 +1022,37 @@ Else -> Error(ec, err)
 This logic checks and handles a document X previously read inside a transaction, A, being involved in another transaction B. It takes a TransactionGetResult gr variable.
 
 If gr has no transaction Metadata, it’s fine to proceed.
-Else, if transaction A == transaction B, it’s fine to proceed
-Else there’s a write-write conflict.
-Note that it’s essential not to get blocked permanently here. B could be a crashed pending transaction, in which case X will never be cleaned up. The basic algo is to check B’s ATR entry - if it’s been cleaned up (removed), we can proceed.
-But, most of the time, B just needs a little time to complete, so there’s no need to check the ATR, it’s just adding unnecessary operations.
-So there’s a threshold after which we start checking B’s ATR. This is arbitrarily set at one second. This is just measured from the start of the transaction (we don’t try and measure separately times spent blocked by multiple transactions). This is not currently configurable.
-The algo:
-If under the threshold, raise Error(FAIL_WRITE_WRITE_CONFLICT, DocumentAlreadyInTransaction, retry=true)
-Else get B’s ATR entry:
-Call hook beforeCheckATREntryForBlockingDoc, passing this AttemptContext and the ATR’s key. On error from this
-Do a lookupIn call to fetch the ATR entry.
-If the ATR exists but the entry does not, it has been cleaned up. Proceed.
-Else, including on any error, assume we’re still blocked (CP) and raise
-             */
+            */
+            if (gr.Links == null)
+            {
+                return;
+            }
+////Else, if transaction A == transaction B, it’s fine to proceed
+
+            if (gr.Links.StagedTransactionId == _overallContext.TransactionId)
+            {
+                return;
+            }
+
+            if (_overallContext.StartTime.AddSeconds(1) < DateTimeOffset.UtcNow)
+            {
+                // under the threshold, so raise the conflict error
+                throw ErrorBuilder.CreateError(this, ErrorClass.FailWriteWriteConflict)
+                    .Cause(DocumentAlreadyInTransactionException.Create(this, gr))
+                    .RetryTransaction().Build();
+            }
+////Else there’s a write-write conflict.
+////Note that it’s essential not to get blocked permanently here. B could be a crashed pending transaction, in which case X will never be cleaned up. The basic algo is to check B’s ATR entry - if it’s been cleaned up (removed), we can proceed.
+////But, most of the time, B just needs a little time to complete, so there’s no need to check the ATR, it’s just adding unnecessary operations.
+////So there’s a threshold after which we start checking B’s ATR. This is arbitrarily set at one second. This is just measured from the start of the transaction (we don’t try and measure separately times spent blocked by multiple transactions). This is not currently configurable.
+////The algo:
+////If under the threshold, raise Error(FAIL_WRITE_WRITE_CONFLICT, DocumentAlreadyInTransaction, retry=true)
+////Else get B’s ATR entry:
+////Call hook beforeCheckATREntryForBlockingDoc, passing this AttemptContext and the ATR’s key. On error from this
+////Do a lookupIn call to fetch the ATR entry.
+////If the ATR exists but the entry does not, it has been cleaned up. Proceed.
+////Else, including on any error, assume we’re still blocked (CP) and raise
+             
         }
 
         private enum StagedMutationType

@@ -6,6 +6,8 @@ using Couchbase.Core.IO.Operations;
 using Couchbase.Core.IO.Serializers;
 using Couchbase.Core.IO.Transcoders;
 using Couchbase.Core.Logging;
+using Microsoft.Extensions.Logging;
+using Moq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -16,7 +18,8 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
         private Dictionary<Type, object> _services = new Dictionary<Type, object>()
         {
             {typeof(IRedactor), new MockRedactor()}, 
-            {typeof(ITypeTranscoder), new MockTranscoder()}
+            {typeof(ITypeTranscoder), new MockTranscoder()},
+            {typeof(ILoggerFactory), new MockLoggerFactory()}
         };
 
         public object GetService(Type serviceType)
@@ -55,5 +58,20 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
         public object MetaData(object message) => $"MOCK_META_REDACTED({message})";
 
         public object SystemData(object message) => $"MOCK_SYSTEM_REDACTED({message})";
+    }
+
+    internal class MockLoggerFactory : ILoggerFactory
+    {
+        public void Dispose()
+        {
+            
+        }
+
+        public ILogger CreateLogger(string categoryName) => new Mock<ILogger>().Object;
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+
+        }
     }
 }

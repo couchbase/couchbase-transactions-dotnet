@@ -27,49 +27,17 @@ namespace Couchbase.Transactions.Tests.UnitTests
             _outputHelper = outputHelper;
         }
 
-        ////[Fact]
-        ////public async Task Run_Basic_Get()
-        ////{
-        ////    var mockDocs = new List<ObjectGetResult>()
-        ////    {
-        ////        new ObjectGetResult("found-id", new object())
-        ////    };
-
-        ////    using var cluster = CreateTestCluster(mockDocs);
-        ////    using var transactions = Transactions.Create(cluster);
-        ////    var reachedEnd = false;
-        ////    var transactionResult = await transactions.Run(async ctx =>
-        ////    {
-        ////        var bucket = await cluster.BucketAsync("test-bucket").ConfigureAwait(false);
-        ////        var collection = bucket.DefaultCollection();
-        ////        var notFoundDoc = await ctx.GetOptional(collection, "notFound-id").ConfigureAwait(false);
-        ////        Assert.Null(notFoundDoc);
-        ////        reachedEnd = true;
-        ////    });
-
-        ////    Assert.True(reachedEnd);
-        ////    Assert.NotNull(transactionResult);
-        ////    Assert.NotEmpty(transactionResult.Attempts);
-        ////}
-
         [Fact]
         public async Task Canonical_Example_Compiles()
         {
             try
             {
                 await CanonicalExample();
-            }
+            } 
             catch (Exception e)
             {
                 _outputHelper.WriteLine($"{nameof(Canonical_Example_Compiles)}: Unhandled Exception: {e.ToString()}");
             }
-        }
-
-        [Fact]
-        public async Task Canonical_Example_Runs_To_End_Without_Throwing()
-        {
-            var ranToEnd = await CanonicalExample();
-            Assert.True(ranToEnd);
         }
 
         private async Task<bool> CanonicalExample()
@@ -135,9 +103,15 @@ namespace Couchbase.Transactions.Tests.UnitTests
 
         private ICluster CreateTestCluster(IEnumerable<TransactionGetResult> mockDocs)
         {
+            var mockCollection = new MockCollection(mockDocs);
             var mockBucket = new Mock<IBucket>(MockBehavior.Strict);
+            mockBucket.SetupGet(b => b.Name).Returns("MockBucket");
             mockBucket.Setup(b => b.DefaultCollection())
-                .Returns(new MockCollection(mockDocs));
+                .Returns(mockCollection);
+            var mockScope = new Mock<IScope>(MockBehavior.Strict);
+            mockScope.SetupGet(s => s.Name).Returns("MockScope");
+            mockScope.SetupGet(s => s.Bucket).Returns(mockBucket.Object);
+            mockCollection.Scope = mockScope.Object;
             var mockCluster = new Mock<ICluster>(MockBehavior.Strict);
             mockCluster.Setup(c => c.BucketAsync(It.IsAny<string>()))
                 .ReturnsAsync(mockBucket.Object);
