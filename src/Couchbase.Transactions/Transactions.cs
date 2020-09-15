@@ -7,8 +7,11 @@ using System.Transactions;
 using Couchbase.Core.Exceptions;
 using Couchbase.Core.IO.Transcoders;
 using Couchbase.Core.Logging;
+using Couchbase.Core.Retry;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.Deferred;
+using Couchbase.Transactions.Error;
+using Couchbase.Transactions.Error.Internal;
 using Couchbase.Transactions.Internal;
 using Couchbase.Transactions.Internal.Test;
 using Couchbase.Transactions.Log;
@@ -65,9 +68,10 @@ namespace Couchbase.Transactions
 
         public async Task<TransactionResult> Run(Func<AttemptContext, Task> transactionLogic, PerTransactionConfig perConfig)
         {
+            // https://hackmd.io/foGjnSSIQmqfks2lXwNp8w?view#The-Core-Loop
             // TODO: placeholder before TXNN-5: Implement Core Loop
             // real loop will run multiple attempts with retries
-            
+
             var overallContext = new TransactionContext(
                 transactionId: Guid.NewGuid().ToString(),
                 startTime: DateTimeOffset.UtcNow,
@@ -82,41 +86,149 @@ namespace Couchbase.Transactions
             var attempts = new List<TransactionAttempt>();
             result.Attempts = attempts;
 
-            // TODO: retry according to spec
-            bool succeeded = false;
-            for (int i = 0; i < 3; i++)
-            {
-                var ctx = new AttemptContext(
-                    overallContext,
-                    Config,
-                    Guid.NewGuid().ToString(),
-                    this,
-                    TestHooks,
-                    _redactor,
-                    _typeTranscoder,
-                    loggerFactory
-                );
+            var retryBackoffMilliseconds = 1;
+            var randomJitter = new Random();
 
-                // TODO: capture exception.
+            while (!overallContext.IsExpired)
+            {
+                try
+                {
+                    await ExecuteApplicationLambda(transactionLogic, overallContext, loggerFactory, attempts).CAF();
+                    break;
+                }
+                catch (ErrorWrapperException ex)
+                {
+                    // If anything above fails with error err
+                    if (ex.RetryTransaction && !overallContext.IsExpired)
+                    {
+                        // If err.retry is true, and the transaction has not expired
+                        //Apply OpRetryBackoff, with randomized jitter. E.g.each attempt will wait exponentially longer before retrying, up to a limit.
+                        var jitter = randomJitter.Next(10);
+                        var delayMs = retryBackoffMilliseconds + jitter;
+                        await Task.Delay(delayMs).CAF();
+                        retryBackoffMilliseconds = Math.Min(retryBackoffMilliseconds * 10, 100);
+                        //    Go back to the start of this loop, e.g.a new attempt.
+                    }
+                    else
+                    {
+                        // Otherwise, we are not going to retry. What happens next depends on err.raise
+                        switch (ex.FinalErrorToRaise)
+                        {
+                            //  Failure post-commit may or may not be a failure to the application,
+                            // as the cleanup process should complete the commit soon. It often depends on
+                            // whether the application wants RYOW, e.g. AT_PLUS. So, success will be returned,
+                            // but TransactionResult.unstagingComplete() will be false.
+                            // The application can interpret this as it needs.
+                            case ErrorWrapperException.FinalError.TransactionFailedPostCommit:
+                                return result;
+
+                            // Raise TransactionExpired to application, with a cause of err.cause.
+                            case ErrorWrapperException.FinalError.TransactionExpired:
+                                throw new TransactionExpiredException("Transaction Expired", ex.Cause);
+
+                            // Raise TransactionCommitAmbiguous to application, with a cause of err.cause.
+                            case ErrorWrapperException.FinalError.TransactionCommitAmbiguous:
+                                throw new TransactionCommitAmbiguousException("Transaction may have failed to commit.", ex.Cause);
+
+                            default:
+                                throw new TransactionFailedException("Transaction failed.", ex.Cause);
+                        }
+                    }
+                }
+                catch (Exception notAnErrorWrapperException)
+                {
+                    // Assert err is an ErrorWrapper
+                    throw new InvalidOperationException(
+                        "All exceptions should have been wrapped in an ErrorWrapperException.",
+                        notAnErrorWrapperException);
+                }
+            }
+
+            return result;
+        }
+
+        private async Task ExecuteApplicationLambda(Func<AttemptContext, Task> transactionLogic, TransactionContext overallContext, ILoggerFactory? loggerFactory,
+            List<TransactionAttempt> attempts)
+        {
+
+            var ctx = new AttemptContext(
+                overallContext,
+                Config,
+                Guid.NewGuid().ToString(),
+                this,
+                TestHooks,
+                _redactor,
+                _typeTranscoder,
+                loggerFactory
+            );
+
+            try
+            {
                 try
                 {
                     await transactionLogic(ctx).CAF();
                     await ctx.AutoCommit().CAF();
                     var attempt = ctx.ToAttempt();
                     attempts.Add(attempt);
-                    succeeded = true;
-                    break;
                 }
-                catch (Exception ex)
+                catch (ErrorWrapperException)
                 {
-                    var errAttempt = ctx.ToAttempt();
-                    errAttempt.TermindatedByException = ex;
-                    attempts.Add(errAttempt);
-                    // TODO: check if exception needs auto-rollback.
+                    // already a classified error
+                    throw;
+                }
+                catch (Exception innerEx)
+                {
+                    // If err is not an ErrorWrapper, follow
+                    // Exceptions Raised by the Application Lambda logic to turn it into one.
+                    // From now on, all errors must be an ErrorWrapper.
+                    // https://hackmd.io/foGjnSSIQmqfks2lXwNp8w?view#Exceptions-Raised-by-the-Application-Lambda
+                    var error = ErrorBuilder.CreateError(ctx, innerEx.Classify()).Cause(innerEx);
+                    if (innerEx is IRetryable)
+                    {
+                        error.RetryTransaction();
+                    }
+
+                    throw error.Build();
                 }
             }
+            catch (ErrorWrapperException ex)
+            {
+                // If err.rollback is true (it generally will be), auto-rollback the attempt by calling rollbackInternal with appRollback=false.
+                if (ex.AutoRollbackAttempt)
+                {
+                    try
+                    {
+                        await ctx.RollbackInternal(isAppRollback: false).CAF();
+                    }
+                    catch
+                    {
+                        // if rollback failed, raise the original error, but with retry disabled:
+                        // Error(ec = err.ec, cause = err.cause, raise = err.raise
+                        throw ErrorBuilder.CreateError(ctx, ex.CausingErrorClass)
+                            .Cause(ex.Cause)
+                            .DoNotRollbackAttempt()
+                            .Build();
+                    }
+                    finally
+                    {
+                        // Whether this fails or succeeds
+                        //  Add a TransactionAttempt that will be returned in the final TransactionResult.
+                        //  AddCleanupRequest, if the cleanup thread is configured to be running.
+                        var errAttempt = ctx.ToAttempt();
+                        errAttempt.TermindatedByException = ex;
+                        attempts.Add(errAttempt);
+                        AddCleanupRequest();
+                    }
+                }
 
-            return result;
+                // Else if it succeeded or no rollback was performed, propagate err up.
+                throw;
+            }
+        }
+
+        private void AddCleanupRequest()
+        {
+            // TODO: TXNN-15
         }
 
         public Task<TransactionResult> Commit(TransactionSerializedContext serialized, PerTransactionConfig perConfig) => throw new NotImplementedException();

@@ -4,16 +4,16 @@ using System.Text;
 
 namespace Couchbase.Transactions.Error.Internal
 {
-    internal class ErrorWrapperException : CouchbaseException
+    internal class ErrorWrapperException : CouchbaseException, IClassifiedTransactionError
     {
         private readonly AttemptContext _ctx;
-        private readonly ErrorClass _causingErrorClass;
-        private readonly bool _autoRollbackAttempt;
-        private readonly bool _retryTransaction;
-        private readonly Exception _cause;
-        private readonly FinalErrorToRaise _finalErrorToRaise;
+        public ErrorClass CausingErrorClass { get; }
+        public bool AutoRollbackAttempt { get; }
+        public bool RetryTransaction { get; }
+        public Exception Cause { get; }
+        internal FinalError FinalErrorToRaise { get; }
 
-        internal enum FinalErrorToRaise
+        internal enum FinalError
         {
             TransactionFailed = 0,
             TransactionExpired = 1,
@@ -26,19 +26,19 @@ namespace Couchbase.Transactions.Error.Internal
         }
 
         public ErrorWrapperException(
-            AttemptContext ctx, 
-            ErrorClass causingErrorClass, 
+            AttemptContext ctx,
+            ErrorClass causingErrorClass,
             bool autoRollbackAttempt,
-            bool retryTransaction, 
-            Exception cause, 
-            FinalErrorToRaise finalErrorToRaise)
+            bool retryTransaction,
+            Exception cause,
+            FinalError finalErrorToRaise)
         {
             _ctx = ctx;
-            _causingErrorClass = causingErrorClass;
-            _autoRollbackAttempt = autoRollbackAttempt;
-            _retryTransaction = retryTransaction;
-            _cause = cause;
-            _finalErrorToRaise = finalErrorToRaise;
+            CausingErrorClass = causingErrorClass;
+            AutoRollbackAttempt = autoRollbackAttempt;
+            RetryTransaction = retryTransaction;
+            Cause = cause;
+            FinalErrorToRaise = finalErrorToRaise;
         }
     }
 }

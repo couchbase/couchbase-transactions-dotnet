@@ -6,5 +6,9 @@ namespace Couchbase.Transactions.Error
 {
     public class TransactionCommitAmbiguousException : TransactionFailedException
     {
+        public TransactionCommitAmbiguousException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
     }
 }

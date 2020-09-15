@@ -675,9 +675,8 @@ A FAIL_AMBIGUOUS could leave the ATR state as COMPLETED but the in-memory state 
                                     ////    isXattr: true)
                                     .Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
                                     .SetDoc(finalDoc),
-                            opts => opts.Cas( casZeroMode ? 0 : sm.Doc.Cas))
+                            opts => opts.Cas( casZeroMode ? 0 : sm.Doc.Cas).StoreSemantics(StoreSemantics.Replace))
                         .CAF();
-
                 }
 
                 if (mutateResult?.MutationToken != null)
@@ -870,7 +869,7 @@ Else -> Error(ec, err)
 
         protected bool IsDone => _state != AttemptStates.NOTHING_WRITTEN && _state != AttemptStates.PENDING;
 
-        protected async Task RollbackInternal(bool isAppRollback)
+        internal async Task RollbackInternal(bool isAppRollback)
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#rollbackInternal
             CheckExpiry();
@@ -1009,7 +1008,7 @@ Else -> Error(ec, err)
             if (_overallContext.IsExpired)
             {
                 throw CreateError(this, ErrorClass.FailExpiry)
-                    .RaiseException(ErrorWrapperException.FinalErrorToRaise.TransactionExpired)
+                    .RaiseException(ErrorWrapperException.FinalError.TransactionExpired)
                     .Build();
             }
         }

@@ -10,10 +10,10 @@ namespace Couchbase.Transactions.Error
     {
         private readonly AttemptContext _ctx;
         private readonly ErrorClass _causingErrorClass;
-        private ErrorWrapperException.FinalErrorToRaise _toRaise = ErrorWrapperException.FinalErrorToRaise.TransactionFailed;
+        private ErrorWrapperException.FinalError _toRaise = ErrorWrapperException.FinalError.TransactionFailed;
         private bool _rollbackAttempt;
         private bool _retryTransaction;
-        private Exception _cause;
+        private Exception _cause = new Exception("generic exception cause");
 
         private ErrorBuilder(AttemptContext ctx, ErrorClass causingErrorClass)
         {
@@ -26,7 +26,7 @@ namespace Couchbase.Transactions.Error
             return new ErrorBuilder(ctx, causingErrorClass);
         }
 
-        public ErrorBuilder RaiseException(ErrorWrapperException.FinalErrorToRaise finalErrorToRaise)
+        public ErrorBuilder RaiseException(ErrorWrapperException.FinalError finalErrorToRaise)
         {
             _toRaise = finalErrorToRaise;
             return this;
@@ -44,8 +44,14 @@ namespace Couchbase.Transactions.Error
             return this;
         }
 
-        public ErrorBuilder Cause([NotNull] Exception cause)
+        public ErrorBuilder Cause(Exception cause)
         {
+            if (cause.StackTrace != null)
+            {
+                _cause = cause;
+                return this;
+            }
+
             // capture the stack trace
             try
             {
