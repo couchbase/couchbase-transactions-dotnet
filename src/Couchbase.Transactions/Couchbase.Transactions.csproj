@@ -17,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\couchbase-net-client-fortxn\src\Couchbase\Couchbase.csproj" />
+    <ProjectReference Include="..\..\..\couchbase-net-client\src\Couchbase\Couchbase.csproj" />
   </ItemGroup>
 
 </Project>
