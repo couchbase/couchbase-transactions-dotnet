@@ -19,6 +19,7 @@ using Couchbase.Transactions.Components;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Error.Attempts;
+using Couchbase.Transactions.Error.external;
 using Couchbase.Transactions.Error.Internal;
 using Couchbase.Transactions.Internal.Test;
 using Couchbase.Transactions.Log;
@@ -34,6 +35,7 @@ namespace Couchbase.Transactions
 {
     public class AttemptContext
     {
+        private const int _sanityRetryLimit = 10000;
         private readonly TransactionContext _overallContext;
         private readonly TransactionConfig _config;
         private readonly Transactions _parent;
@@ -42,7 +44,7 @@ namespace Couchbase.Transactions
         private readonly ITypeTranscoder _transcoder;
         private AttemptStates _state = AttemptStates.NOTHING_WRITTEN;
 
-        private List<StagedMutation> _stagedMutations = new List<StagedMutation>();
+        private readonly List<StagedMutation> _stagedMutations = new List<StagedMutation>();
         private readonly string _attemptId;
 
         private readonly object _initAtrLock = new object();
@@ -54,6 +56,8 @@ namespace Couchbase.Transactions
         private readonly DurabilityLevel _effectiveDurabilityLevel;
         private readonly List<MutationToken> _finalMutations = new List<MutationToken>();
         private ICouchbaseCollection? _atrCollection;
+        private readonly ConcurrentDictionary<long, ErrorWrapperException> _previousErrors = new ConcurrentDictionary<long, ErrorWrapperException>();
+        private bool _expirationOvertimeMode = false;
 
         internal AttemptContext(TransactionContext overallContext,
             TransactionConfig config,
@@ -94,7 +98,15 @@ namespace Couchbase.Transactions
         public async Task<TransactionGetResult?> Get(ICouchbaseCollection collection, string id)
         {
             DoneCheck();
+            CheckErrors();
             CheckExpiry();
+
+            /*
+             * Check stagedMutations.
+               If the doc already exists in there as a REPLACE or INSERT return its post-transaction content in a TransactionGetResult.
+                Protocol 2.0 amendment: and TransactionGetResult::links().isDeleted() reflecting whether it is a tombstone or not.
+               Else if the doc already exists in there as a remove, return empty.
+             */
             var staged = FindStaged(collection, id);
             if (staged != null)
             {
@@ -112,90 +124,184 @@ namespace Couchbase.Transactions
                 }
             }
 
+            // Do Get a document with MAV logic section
             await _testHooks.BeforeDocGet(this, id).CAF();
-
 
             try
             {
-                var doc = await collection.LookupInAsync(
-                    id, 
-                    specs =>
-                        specs.Get(TransactionFields.AtrId, true) // 0
-                            .Get(TransactionFields.TransactionId, isXattr: true) // 1
-                            .Get(TransactionFields.AttemptId, isXattr: true) // 2
-                            .Get(TransactionFields.StagedData, isXattr: true) // 3
-                            .Get(TransactionFields.AtrBucketName, isXattr: true) // 4
-                            .Get(TransactionFields.AtrCollName, isXattr: true) // 5
-                            .Get(TransactionFields.TransactionRestorePrefixOnly, true) // 6
-                            .Get(TransactionFields.Type, true) // 7
-                            .Get("$document", true) //  8
-                            .GetFull(), // 9
-                    opts => opts.Timeout(_config.KeyValueTimeout)    
-                ).CAF();
-
-                // TODO:  Not happy with this mess of logic spread between AttemptContext.cs and TransactionGetResult.FromLookupIn
-                (string? casFromDocument, string? revIdFromDocument, ulong? expTimeFromDocument) = (null, null, null);
-                if (doc.Exists(8))
+                try
                 {
-                    var docMeta = doc.ContentAs<JObject>(8);
-                    casFromDocument = docMeta["CAS"].Value<string>();
-                    revIdFromDocument = docMeta["revid"].Value<string>();
-                    expTimeFromDocument = docMeta["exptime"].Value<ulong?>();
-                }
-
-                (string? casPreTxn, string? revIdPreTxn, ulong? expTimePreTxn) = (null, null, null);
-                if (doc.Exists(6))
-                {
-                    var docMeta = doc.ContentAs<JObject>(6);
-                    if (docMeta != null)
+                    // Do a Sub-Document lookup, getting all transactional metadata, the “$document” virtual xattr,
+                    // and the document’s body. Timeout is set as in Timeouts.
+                    //  TODO: Added for Protocol 2.0: set accessDeleted=true.
+                    var docWithMeta = await LookupDocWithMetada(collection, id).CAF();
+                    var doc = docWithMeta.doc;
+                    // check the transactional metadata to see if the doc is already involved in a transaction.
+                    if (doc.Exists(docWithMeta.atrIdIndex))
                     {
-                        casPreTxn = docMeta["CAS"].Value<string>();
-                        revIdPreTxn = docMeta["revid"].Value<string>();
-                        expTimePreTxn = docMeta["exptime"].Value<ulong?>();
+                        // TODO: updated spec
+                        /*
+                         * if resolvingMissingATREntry == the attemptId in the transactional metadata:
+                           This is our second attempt getting the document, and it’s in the same state as
+                           before (see ActiveTransactionRecordEntryNotFound discussion below). The blocking
+                           transaction must have been cleaned up in PENDING state, leaving this document with
+                           metadata. We are fine to return the body of the document to the app. Except if it
+                           is a staged insert (e.g. it’s a tombstone - protocol 2 - or has a null body -
+                           protocol 1), in which case return empty.
+                         */
                     }
+
+                    TransactionGetResult getResult = TransactionGetResultFromLookupIn(collection, id, docWithMeta);
+
+                    await _testHooks.AfterGetComplete(this, id).CAF();
+
+                    return getResult;
                 }
+                catch (Exception e)
+                {
+                    /*
+                     * On error err of any of the above, classify as ErrorClass ec then:
+                           FAIL_DOC_NOT_FOUND -> return empty
+                           Else FAIL_HARD -> Error(ec, err, rollback=false)
+                           Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
+                           Else -> raise Error(ec, cause=err)
+                     */
+                    var ec = e.Classify();
+                    if (ec == ErrorClass.FailDocNotFound)
+                    {
+                        return null;
+                    }
 
-                // HACK:  ContentAs<byte[]> is failing.
-                ////var preTxnContent = doc.ContentAs<byte[]>(9);
-                var asDynamic = doc.ContentAs<dynamic>(9);
-                var preTxnContent = GetContentBytes(asDynamic);
+                    if (ec == ErrorClass.FailHard)
+                    {
+                        throw CreateError(this, ec)
+                            .Cause(e)
+                            .DoNotRollbackAttempt()
+                            .Build();
+                    }
 
-                var getResult = TransactionGetResult.FromLookupIn(
-                    collection,
-                    id,
-                    TransactionJsonDocumentStatus.Normal,
-                    _transcoder,
-                    doc.Cas,                    
-                    preTxnContent,
-                    atrId: StringIfExists(doc, 0),
-                    transactionId: StringIfExists(doc, 1),
-                    attemptId: StringIfExists(doc, 2),
-                    stagedContent: StringIfExists(doc, 3),
-                    atrBucketName: StringIfExists(doc, 4),
-                    atrLongCollectionName: StringIfExists(doc, 5),
-                    op: StringIfExists(doc, 7),
-                    casPreTxn: casPreTxn,
-                    revidPreTxn: revIdPreTxn,
-                    exptimePreTxn: expTimePreTxn,
-                    casFromDocument: casFromDocument,
-                    revidFromDocument: revIdFromDocument,
-                    exptimeFromDocument: expTimeFromDocument
-                );
+                    if (ec == ErrorClass.FailTransient)
+                    {
+                        throw CreateError(this, ec)
+                            .Cause(e)
+                            .RetryTransaction()
+                            .Build();
+                    }
 
-                await _testHooks.AfterGetComplete(this, id).CAF();
-
-                return getResult;
+                    throw CreateError(this, ec)
+                        .Cause(e)
+                        .Build();
+                }
             }
-            catch (Exception e)
+            catch (ErrorWrapperException toSave)
             {
-                /* TODO:
-                 * On error err of any of the above, classify as ErrorClass ec then:
-FAIL_DOC_NOT_FOUND -> return empty
-Else FAIL_HARD -> Error(ec, err, rollback=false)
-Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
-
-                 */
+                SaveErrorWrapper(toSave);
                 throw;
+            }
+        }
+
+        private TransactionGetResult TransactionGetResultFromLookupIn(ICouchbaseCollection collection, string id,
+            (ILookupInResult doc, int atrIdIndex, int transactionIdIndex, int attemptIdIndex, int stagedDataIndex, int
+                atrBucketNameIndex, int atrColNameIndex, int transactionRestorePrefixOnlyIndex, int typeIndex, int
+                metaDocumentIndex, int fullDocumentIndex) docWithMeta)
+        {
+            var doc = docWithMeta.doc;
+
+            // TODO:  Not happy with this mess of logic spread between AttemptContext.cs and TransactionGetResult.FromLookupIn
+            (string? casFromDocument, string? revIdFromDocument, ulong? expTimeFromDocument) = (null, null, null);
+            if (doc.Exists(docWithMeta.metaDocumentIndex))
+            {
+                var docMeta = doc.ContentAs<JObject>(docWithMeta.metaDocumentIndex);
+                casFromDocument = docMeta["CAS"].Value<string>();
+                revIdFromDocument = docMeta["revid"].Value<string>();
+                expTimeFromDocument = docMeta["exptime"].Value<ulong?>();
+            }
+
+            (string? casPreTxn, string? revIdPreTxn, ulong? expTimePreTxn) = (null, null, null);
+            if (doc.Exists(docWithMeta.transactionRestorePrefixOnlyIndex))
+            {
+                var docMeta = doc.ContentAs<JObject>(docWithMeta.transactionRestorePrefixOnlyIndex);
+                if (docMeta != null)
+                {
+                    casPreTxn = docMeta["CAS"].Value<string>();
+                    revIdPreTxn = docMeta["revid"].Value<string>();
+                    expTimePreTxn = docMeta["exptime"].Value<ulong?>();
+                }
+            }
+
+            // HACK:  ContentAs<byte[]> is failing.
+            ////var preTxnContent = doc.ContentAs<byte[]>(9);
+            var asDynamic = doc.ContentAs<dynamic>(docWithMeta.fullDocumentIndex);
+            var preTxnContent = GetContentBytes(asDynamic);
+
+            TransactionGetResult getResult = TransactionGetResult.FromLookupIn(
+                collection,
+                id,
+                TransactionJsonDocumentStatus.Normal,
+                _transcoder,
+                doc.Cas,
+                preTxnContent,
+                atrId: StringIfExists(doc, docWithMeta.atrIdIndex),
+                transactionId: StringIfExists(doc, docWithMeta.transactionIdIndex),
+                attemptId: StringIfExists(doc, docWithMeta.attemptIdIndex),
+                stagedContent: StringIfExists(doc, docWithMeta.stagedDataIndex),
+                atrBucketName: StringIfExists(doc, docWithMeta.atrBucketNameIndex),
+                atrLongCollectionName: StringIfExists(doc, docWithMeta.atrColNameIndex),
+                op: StringIfExists(doc, docWithMeta.typeIndex),
+                casPreTxn: casPreTxn,
+                revidPreTxn: revIdPreTxn,
+                exptimePreTxn: expTimePreTxn,
+                casFromDocument: casFromDocument,
+                revidFromDocument: revIdFromDocument,
+                exptimeFromDocument: expTimeFromDocument
+            );
+            return getResult;
+        }
+
+        private async Task<(
+            ILookupInResult doc,
+            int atrIdIndex,
+            int transactionIdIndex,
+            int attemptIdIndex,
+            int stagedDataIndex,
+            int atrBucketNameIndex,
+            int atrColNameIndex,
+            int transactionRestorePrefixOnlyIndex,
+            int typeIndex,
+            int metaDocumentIndex,
+            int fullDocumentIndex)> LookupDocWithMetada(ICouchbaseCollection collection, string id)
+        {
+            // TODO: promote this to a real class/struct, rather than just a named tuple.
+            var doc = await collection.LookupInAsync(
+                id,
+                specs =>
+                    specs.Get(TransactionFields.AtrId, true) // 0
+                        .Get(TransactionFields.TransactionId, isXattr: true) // 1
+                        .Get(TransactionFields.AttemptId, isXattr: true) // 2
+                        .Get(TransactionFields.StagedData, isXattr: true) // 3
+                        .Get(TransactionFields.AtrBucketName, isXattr: true) // 4
+                        .Get(TransactionFields.AtrCollName, isXattr: true) // 5
+                        .Get(TransactionFields.TransactionRestorePrefixOnly, true) // 6
+                        .Get(TransactionFields.Type, true) // 7
+                        .Get("$document", true) //  8
+                        .GetFull(), // 9
+                opts => opts.Timeout(_config.KeyValueTimeout)
+            ).CAF();
+
+            return (doc, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+        }
+
+        private void CheckErrors()
+        {
+            /*
+             * Before performing any operation, including commit, check if the errors member is non-empty.
+             * If so, raise an Error(ec=FAIL_OTHER, cause=PreviousOperationFailed).
+             */
+            if (!_previousErrors.IsEmpty)
+            {
+                throw ErrorBuilder.CreateError(this, ErrorClass.FailOther)
+                    .Cause(new PreviousOperationFailedException(_previousErrors.Values))
+                    .Build();
             }
         }
 
@@ -214,8 +320,9 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
         public async Task<TransactionGetResult> Replace(TransactionGetResult doc, object content)
         {
             DoneCheck();
+            CheckErrors();
             CheckExpiry();
-            CheckWriteWriteConflict(doc);
+            await CheckWriteWriteConflict(doc).CAF();
             InitAtrIfNeeded(doc.Collection, doc.Id);
             await SetAtrPendingIfFirstMutation(doc.Collection);
 
@@ -227,7 +334,7 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
         {
             if (_stagedMutations.Count == 0)
             {
-                var setAtrPendingResult = await SetAtrPending(collection);
+                _ = await SetAtrPending(collection);
             }
         }
 
@@ -269,15 +376,12 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
 
                 doc.Cas = updatedDoc.Cas;
 
-                ////LOGGER.info(attemptId, "replaced doc %s got %s, in %dms",
-                ////    RedactableArgument.redactUser(doc.id()), dbg(updatedDoc), elapsed);
-
                 var stagedOld = FindStaged(doc);
                 if (stagedOld != null)
                 {
                     _stagedMutations.Remove(stagedOld);
                 }
-                
+
                 if (stagedOld?.Type == StagedMutationType.Insert)
                 {
                     // If doc is already in stagedMutations as an INSERT or INSERT_SHADOW, then remove that, and add this op as a new INSERT or INSERT_SHADOW(depending on what was replaced).
@@ -302,10 +406,66 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
                     updatedDoc,
                     _transcoder);
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                // TODO: Error-handling per spec.
-                throw;
+                try
+                {
+                    HandleStagedRemoveOrReplaceError(ex, out var ec);
+
+                    // Else -> Error(ec, err)
+                    if (ex is ErrorWrapperException)
+                    {
+                        throw;
+                    }
+
+                    throw CreateError(this, ec)
+                        .Cause(ex)
+                        .Build();
+                }
+                catch (ErrorWrapperException toSave)
+                {
+                    // On any item above that raises an Error, before doing so, SaveErrorWrapper.
+                    SaveErrorWrapper(toSave);
+                    throw;
+                }
+            }
+        }
+
+        private void HandleStagedRemoveOrReplaceError(Exception ex, out ErrorClass ec)
+        {
+            ec = ex.Classify();
+
+            switch (ec)
+            {
+                // FAIL_EXPIRY -> set ExpiryOvertimeMode and raise Error(ec, AttemptExpired(err),
+                // raise=TRANSACTION_EXPIRED)
+                case ErrorClass.FailExpiry:
+                    _expirationOvertimeMode = true;
+                    throw CreateError(this, ec)
+                        .Cause(ex)
+                        .Cause(new TransactionExpiredException("Expiration detected while attempting replace.",
+                            ex))
+                        .Build();
+
+                // Else FAIL_DOC_NOT_FOUND || FAIL_CAS_MISMATCH -> Doc was modified in-between get and replace.
+                // Error(ec, err, retry=true)
+                // Else FAIL_DOC_NOT_FOUND [sic] || FAIL_TRANSIENT || FAIL_AMBIGUOUS
+                // Error(ec, err, retry=true)
+                case ErrorClass.FailDocNotFound:
+                case ErrorClass.FailCasMismatch:
+                case ErrorClass.FailTransient:
+                case ErrorClass.FailAmbiguous:
+                    throw CreateError(this, ec)
+                        .Cause(ex)
+                        .RetryTransaction()
+                        .Build();
+
+                // FAIL_HARD -> Error(ec, err, rollback=false)
+                case ErrorClass.FailHard:
+                    throw CreateError(this, ec)
+                        .Cause(ex)
+                        .DoNotRollbackAttempt()
+                        .Build();
             }
         }
 
@@ -327,16 +487,17 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
 
         public async Task<TransactionGetResult> Insert(ICouchbaseCollection collection, string id, object content)
         {
+            // TODO:  How does the user specify expiration?
             DoneCheck();
             CheckExpiry();
             InitAtrIfNeeded(collection, id);
             await SetAtrPendingIfFirstMutation(collection);
 
-            // If this document already exists in StagedMutation, raise Error(FAIL_OTHER, cause=IllegalStateException [or platform-specific equivalent]). 
-            if (_stagedMutations.Any(sm => sm.Doc.Id == id))
+            // If this document already exists in StagedMutation, raise Error(FAIL_OTHER, cause=IllegalStateException [or platform-specific equivalent]).
+            if (_stagedMutations.Any(sm => sm.Doc.FullyQualifiedId == TransactionGetResult.GetFullyQualifiedId(collection, id)))
             {
                 throw CreateError(this, ErrorClass.FailOther)
-                    .Cause(new InvalidOperationException("Document is already staged for insert."))
+                    .Cause(new InvalidOperationException("Document is already staged for a mutation."))
                     .Build();
             }
 
@@ -347,60 +508,205 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
         {
             try
             {
-                // Check expiration again, since insert might be retried.
-                CheckExpiry();
-
-                await _testHooks.BeforeStagedInsert(this, id).CAF();
-
-                var contentBytes = GetContentBytes(content);
-                List<MutateInSpec> specs = CreateMutationOps("insert");
-                specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData, contentBytes, isXattr: true));
-
-                var mutateResult = await collection.MutateInAsync(id, specs, opts =>
+                var retryCount = 0;
+                while (retryCount++ < _sanityRetryLimit)
+                {
+                    try
                     {
-                        if (cas.HasValue)
+                        // Check expiration again, since insert might be retried.
+                        CheckExpiry();
+
+                        await _testHooks.BeforeStagedInsert(this, id).CAF();
+
+                        var contentBytes = GetContentBytes(content);
+                        List<MutateInSpec> specs = CreateMutationOps("insert");
+                        specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData, contentBytes, isXattr: true));
+
+                        var mutateResult = await collection.MutateInAsync(id, specs, opts =>
                         {
-                            opts.Cas(cas.Value).StoreSemantics(StoreSemantics.Replace);
-                        }
-                        else
+                            var mutateCas = cas;
+                            if (mutateCas.HasValue)
+                            {
+                                opts.Cas(mutateCas.Value).StoreSemantics(StoreSemantics.Replace);
+                            }
+                            else
+                            {
+                                opts.StoreSemantics(StoreSemantics.Insert);
+                            }
+
+                            opts.Durability(_effectiveDurabilityLevel);
+
+                            // TODO: accessDeleted = true (needs NCBC-2573)
+                            // TODO: createAsDeleted = true (needs NCBC-2573)
+                        }).CAF();
+
+                        var getResult = TransactionGetResult.FromInsert(
+                            collection,
+                            id,
+                            contentBytes,
+                            _overallContext.TransactionId,
+                            _attemptId,
+                            _atrId!,
+                            _atrBucketName!,
+                            _atrScopeName!,
+                            _atrCollectionName!,
+                            mutateResult,
+                            _transcoder);
+
+                        await _testHooks.AfterStagedInsertComplete(this, id).CAF();
+
+                        var stagedMutation = new StagedMutation(getResult, contentBytes, StagedMutationType.Insert, mutateResult);
+                        _stagedMutations.Add(stagedMutation);
+
+                        return getResult;
+                    }
+                    catch (FeatureNotAvailableException e)
+                    {
+                        // If err is FeatureNotFoundException, then this cluster does not support creating shadow
+                        // documents. (Unfortunately we cannot perform this check at the Transactions.create point,
+                        // as we may not have a cluster config available then).
+                        // Raise Error(ec=FAIL_OTHER, cause=err) to terminate the transaction.
+                        throw CreateError(this, ErrorClass.FailOther)
+                            .Cause(e).
+                            Build();
+                    }
+                    catch (Exception ex)
+                    {
+                        // If in ExpiryOvertimeMode -> Error(FAIL_EXPIRY, AttemptExpired(err), rollback=false, raise=TRANSACTION_EXPIRED)
+                        if (_expirationOvertimeMode)
                         {
-                            opts.StoreSemantics(StoreSemantics.Insert);
+                            throw CreateError(this, ErrorClass.FailExpiry)
+                                .Cause(new AttemptExpiredException(this, "Cannot insert after transaction expired."))
+                                .DoNotRollbackAttempt()
+                                .RaiseException(ErrorWrapperException.FinalError.TransactionExpired)
+                                .Build();
                         }
 
-                        opts.Durability(_effectiveDurabilityLevel);
+                        var ec = ex.Classify();
+                        switch (ec)
+                        {
+                            // Else FAIL_EXPIRY -> set ExpiryOvertimeMode and raise Error(ec, AttemptExpired(err), raise=TRANSACTION_EXPIRED)
+                            case ErrorClass.FailExpiry:
+                                _expirationOvertimeMode = true;
+                                throw CreateError(this, ec)
+                                    .Cause(new AttemptExpiredException(this, "Attempt expired"))
+                                    .RaiseException(ErrorWrapperException.FinalError.TransactionExpired)
+                                    .Build();
 
-                        // TODO: accessDeleted = true (needs NCBC-2573)
-                        // TODO: createAsDeleted = true (needs NCBC-2573)
-                    }).CAF();
+                            // FAIL_AMBIGUOUS -> Ambiguously inserted marker documents can cause complexities during rollback and retry,
+                            // so aim to resolve the ambiguity now by retrying this operation from the top of this section, after
+                            // OpRetryDelay. If this op had succeeded then this will cause FAIL_DOC_EXISTS.
+                            case ErrorClass.FailAmbiguous:
+                                await Task.Delay(Transactions.OpRetryDelay).CAF();
+                                break;
 
-                var getResult = TransactionGetResult.FromInsert(
-                    collection,
-                    id,
-                    contentBytes,
-                    _overallContext.TransactionId,
-                    _attemptId,
-                    _atrId!,
-                    _atrBucketName!,
-                    _atrScopeName!,
-                    _atrCollectionName!,
-                    mutateResult,
-                    _transcoder);
+                            // FAIL_TRANSIENT -> Error(ec, err, retry=true)
+                            case ErrorClass.FailTransient:
+                                throw CreateError(this, ec, ex)
+                                    .RetryTransaction()
+                                    .Build();
 
-                await _testHooks.AfterStagedInsertComplete(this, id).CAF();
+                            // FAIL_HARD -> Error(ec, err, rollback=false)
+                            case ErrorClass.FailHard:
+                                throw CreateError(this, ec, ex)
+                                    .DoNotRollbackAttempt()
+                                    .Build();
 
-                var stagedMutation = new StagedMutation(getResult, contentBytes, StagedMutationType.Insert, mutateResult);
-                _stagedMutations.Add(stagedMutation);
+                            // FAIL_CAS_MISMATCH -> We’re trying to overwrite an existing tombstone, and it’s changed. Could be an external actor (such as another transaction), or could be that a FAIL_AMBIGUOUS happened and actually succeeded. Either way, do the FAIL_DOC_ALREADY_EXISTS logic below again.
+                            case ErrorClass.FailCasMismatch:
+                                goto case ErrorClass.FailDocAlreadyExists;
 
-                return getResult;
-            }
-            catch (FeatureNotAvailableException e)
-            {
+                            case ErrorClass.FailDocAlreadyExists:
+                                /*
+                                 * FAIL_DOC_ALREADY_EXISTS -> There are multiple reasons we could end up here:
+                                   Most likely, the document simply existed before, as a regular doc. In which case we want to fast fail.
+                                   Another transaction B could have staged that document (either as a tombstone or not) then crashed in PENDING state. The cleanup process will not be able to resolve the document, it will only be able to remove B’s ATR entry. We can’t get blocked here, we want to overwrite the document if B’s ATR entry is removed.
+                                   We got FAIL_AMBIGUOUS on the previous attempt (which could have been staging as a tombstone or not), which actually succeeded, so our retry of the insert hits this.
+                                   We got FAIL_AMBIGUOUS but it actually failed and another transaction has managed to either stage or commit the same document (as a tombstone or not). Somewhat edge-casey, but means we can’t rely on some sort of isAmbiguityResolution flag.
+                                   (In both FAIL_AMBIGUOUS cases, we want to proceed as successful only if the document is staged with this transaction’s metadata. Else we want to fast fail.)
+                                   The logic to resolve all these cases is to get the document, and check its metadata and tombstone status to see whether to proceed.
+                                 */
+                                try
+                                {
+                                    await _testHooks.BeforeGetDocInExistsDuringStagedInsert(this, id).CAF();
+                                    var docWithMeta = await LookupDocWithMetada(collection, id).CAF();
+                                    var doc = docWithMeta.doc;
+
+                                    var docInATransaction =
+                                        doc.Exists(docWithMeta.atrIdIndex) &&
+                                        !string.IsNullOrEmpty(doc.ContentAs<string>(docWithMeta.atrIdIndex));
+
+                                    // TODO: handle tombstone detection when NCBC-2573 is done.
+                                    var docIsTombstone = false;
+                                    if (docIsTombstone && !docInATransaction)
+                                    {
+                                        // If the doc is a tombstone and not in any transaction
+                                        // -> It’s ok to go ahead and overwrite.
+                                       // Perform this algorithm from the top with cas=the cas from the get.
+                                        cas = doc.Cas;
+                                        break;
+                                    }
+
+                                    // Else if the doc is not in a transaction
+                                    // -> Raise Error(FAIL_DOC_ALREADY_EXISTS, cause=DocumentExistsException).
+                                    // There is logic further up the stack that handles this by fast-failing the transaction.
+                                    if (!docInATransaction)
+                                    {
+                                        throw CreateError(this, ErrorClass.FailDocAlreadyExists)
+                                            .Cause(new DocumentExistsException())
+                                            .Build();
+                                    }
+                                    else
+                                    {
+                                        // Else call the CheckWriteWriteConflict logic, which conveniently does everything we need to handle the above cases.
+                                        var getResult = TransactionGetResultFromLookupIn(collection, id, docWithMeta);
+                                        await CheckWriteWriteConflict(getResult).CAF();
+
+                                        // If this logic succeeds, we are ok to overwrite the doc.
+                                        // Perform this algorithm from the top, with cas=the cas from the get.
+                                        cas = getResult.Cas;
+                                        break;
+                                    }
+                                }
+                                catch (Exception exHandleDocExists)
+                                {
+                                    var ecHandleDocExists = ex.Classify();
+                                    switch (ecHandleDocExists)
+                                    {
+                                        // FAIL_DOC_NOT_FOUND -> The doc did exist, and now doesn’t.
+                                        // (This is extremely unlikely given that we’re fetching tombstones.)
+                                        // Error(ec, retry=true)
+                                        // FAIL_PATH_NOT_FOUND -> This is what will happen if the doc has been deleted, or if it’s simply a normal tombstone.
+                                        // We will get the tombstone and it will be missing the “txn” xattr metadata.
+                                        // Error(ec, retry=true)
+                                        // FAIL_TRANSIENT -> Let’s try all this again.
+                                        // Error(ec, retry=true)
+                                        case ErrorClass.FailDocNotFound:
+                                        case ErrorClass.FailPathNotFound:
+                                        case ErrorClass.FailTransient:
+                                            throw CreateError(this, ecHandleDocExists, exHandleDocExists)
+                                                .RetryTransaction()
+                                                .Build();
+
+                                        // Else -> Bailout. Error(ec, cause=err)
+                                        default:
+                                            throw CreateError(this, ecHandleDocExists, exHandleDocExists)
+                                                .Build();
+                                    }
+                                }
+                        }
+                    }
+                }
+
+                // This should not be hit under normal circumstances.  Expiration will happen first.
                 throw CreateError(this, ErrorClass.FailOther)
-                    .Cause(e).Build();
+                    .Cause(new InvalidOperationException("Retried past sanity limit.  Possible infinite loop."))
+                    .RaiseException(ErrorWrapperException.FinalError.TransactionFailed)
+                    .Build();
             }
-            catch (ErrorWrapperException e)
+            catch (ErrorWrapperException toSave)
             {
-                // TODO: on error, classify error per spec 
+                SaveErrorWrapper(toSave);
                 throw;
             }
         }
@@ -465,67 +771,92 @@ Else FAIL_TRANSIENT -> Error(ec, err, retry=true)
         public async Task Remove(TransactionGetResult doc)
         {
             DoneCheck();
+            CheckErrors();
             CheckExpiry();
-            CheckWriteWriteConflict(doc);
-            InitAtrIfNeeded(doc.Collection, doc.Id);
-            await SetAtrPendingIfFirstMutation(doc.Collection);
+            if (StagedInserts.Any(sm => sm.Doc.FullyQualifiedId == doc.FullyQualifiedId))
+            {
+                throw CreateError(this, ErrorClass.FailOther)
+                    .Cause(new InvalidOperationException("Document is already staged for insert."))
+                    .Build();
+            }
 
-            await CreateStagedRemove(doc);
+            await CheckWriteWriteConflict(doc).CAF();
+            InitAtrIfNeeded(doc.Collection, doc.Id);
+            await SetAtrPendingIfFirstMutation(doc.Collection).CAF();
+            await CreateStagedRemove(doc).CAF();
         }
 
         private async Task CreateStagedRemove(TransactionGetResult doc)
         {
             try
             {
-                await _testHooks.BeforeStagedRemove(this, doc.Id).CAF();
-                var specs = CreateMutationOps(op: "remove");
-                specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData, TransactionFields.StagedDataRemoveKeyword, isXattr: true));
-
-                if (doc.DocumentMetadata != null)
+                try
                 {
-                    var dm = doc.DocumentMetadata;
-                    if (dm.Cas != null)
+                    await _testHooks.BeforeStagedRemove(this, doc.Id).CAF();
+                    var specs = CreateMutationOps(op: "remove");
+                    specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData, TransactionFields.StagedDataRemoveKeyword, isXattr: true));
+
+                    if (doc.DocumentMetadata != null)
                     {
-                        specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnCas, dm.Cas, isXattr: true));
+                        var dm = doc.DocumentMetadata;
+                        if (dm.Cas != null)
+                        {
+                            specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnCas, dm.Cas, isXattr: true));
+                        }
+
+                        if (dm.RevId != null)
+                        {
+                            specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnRevid, dm.RevId, isXattr: true));
+                        }
+
+                        if (dm.ExpTime != null)
+                        {
+                            specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnExptime, dm.ExpTime, isXattr: true));
+                        }
                     }
 
-                    if (dm.RevId != null)
+                    var opts = new MutateInOptions()
+                        .Cas(doc.Cas)
+                        .StoreSemantics(StoreSemantics.Replace)
+                        .Durability(_effectiveDurabilityLevel);
+
+                    // TODO: set accessDeleted after NCBC-2573 is done.
+                    var updatedDoc = await doc.Collection.MutateInAsync(doc.Id, specs, opts).CAF();
+                    await _testHooks.AfterStagedRemoveComplete(this, doc.Id).CAF();
+
+                    doc.Cas = updatedDoc.Cas;
+                    if (_stagedMutations.Exists(sm => sm.Doc.Id == doc.Id && sm.Type == StagedMutationType.Insert))
                     {
-                        specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnRevid, dm.RevId, isXattr: true));
+                        // TXNJ-35: handle insert-delete with same doc
+
+                        // Commit+rollback: Want to delete the staged empty doc
+                        // However this is hard in practice.  If we remove from stagedInsert and add to
+                        // stagedRemove then commit will work fine, but rollback will not remove the doc.
+                        // So, fast fail this scenario.
+                        throw new InvalidOperationException($"doc {Redactor.UserData(doc.Id)} is being removed after being inserted in the same txn.");
                     }
 
-                    if (dm.ExpTime != null)
-                    {
-                        specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnExptime, dm.ExpTime, isXattr: true));
-                    }
+                    var stagedRemove = new StagedMutation(doc, ActiveTransactionRecord.RemovePlaceholderBytes, StagedMutationType.Remove, updatedDoc);
+                    _stagedMutations.Add(stagedRemove);
                 }
-
-                var opts = new MutateInOptions()
-                    .Cas(doc.Cas)
-                    .StoreSemantics(StoreSemantics.Replace)
-                    .Durability(_effectiveDurabilityLevel);
-
-                var updatedDoc = await doc.Collection.MutateInAsync(doc.Id, specs, opts).CAF();
-                await _testHooks.AfterStagedRemoveComplete(this, doc.Id).CAF();
-
-                doc.Cas = updatedDoc.Cas;
-                if (_stagedMutations.Exists(sm => sm.Doc.Id == doc.Id && sm.Type == StagedMutationType.Insert))
+                catch (Exception ex)
                 {
-                    // TXNJ-35: handle insert-delete with same doc
+                    HandleStagedRemoveOrReplaceError(ex, out var ec);
 
-                    // Commit+rollback: Want to delete the staged empty doc
-                    // However this is hard in practice.  If we remove from stagedInsert and add to
-                    // stagedRemove then commit will work fine, but rollback will not remove the doc.
-                    // So, fast fail this scenario.
-                    throw new InvalidOperationException($"doc {Redactor.UserData(doc.Id)} is being removed after being inserted in the same txn.");
+                    // Else -> Error(ec, err)
+                    if (ex is ErrorWrapperException)
+                    {
+                        throw;
+                    }
+
+                    throw CreateError(this, ec)
+                        .Cause(ex)
+                        .Build();
                 }
-
-                var stagedRemove = new StagedMutation(doc, ActiveTransactionRecord.RemovePlaceholderBytes, StagedMutationType.Remove, updatedDoc);
-                _stagedMutations.Add(stagedRemove);
             }
-            catch (Exception e)
+            catch (ErrorWrapperException toSave)
             {
-                // TODO: Handle errors per spec.
+                SaveErrorWrapper(toSave);
                 throw;
             }
         }
@@ -597,10 +928,10 @@ Note this will leave TransactionResult::unstageCompleted() returning false, even
 A FAIL_AMBIGUOUS could leave the ATR state as COMPLETED but the in-memory state as COMMITTED. This shouldn’t cause any problems.
                  */
 
-                throw;
+                                    throw;
             }
         }
-        
+
         private async Task UnstageDocs()
         {
             foreach (var sm in _stagedMutations)
@@ -661,13 +992,15 @@ A FAIL_AMBIGUOUS could leave the ATR state as COMPLETED but the in-memory state 
             try
             {
                 IMutationResult mutateResult;
+                var finalDoc = _transcoder.Serializer.Deserialize<JObject>(sm.Content);
                 if (insertMode)
                 {
-                    mutateResult = await sm.Doc.Collection.InsertAsync(sm.Doc.Id, sm.Content).CAF();
+                    // TODO: the spec has been updated.
+                    // Implement https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Unstaging-Inserts-and-Replaces-Protocol-20-version
+                    mutateResult = await sm.Doc.Collection.UpsertAsync(sm.Doc.Id, finalDoc).CAF();
                 }
                 else
                 {
-                    var finalDoc = _transcoder.Serializer.Deserialize<JObject>(sm.Content);
                     mutateResult = await sm.Doc.Collection.MutateInAsync(sm.Doc.Id, specs =>
                                 specs
                                     // NCBC-2639
@@ -723,9 +1056,9 @@ The transaction is conceptually committed but unstaging could not complete. Sinc
                 var replaces = new JArray(StagedReplaces.Select(sm => sm.ForAtr()));
                 var removes = new JArray(StagedRemoves.Select(sm => sm.ForAtr()));
                 var specs = new MutateInSpec[]
-                { 
+                {
                     MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStatus}", AttemptStates.COMMITTED.ToString(), isXattr: true),
-                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStartCommit}", MutationMacro.Cas), 
+                    MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldStartCommit}", MutationMacro.Cas),
                     MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldDocsInserted}", inserts, isXattr: true),
                     MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldDocsReplaced}", replaces, isXattr: true),
                     MutateInSpec.Upsert($"{prefix}.{TransactionFields.AtrFieldDocsRemoved}", removes, isXattr: true),
@@ -900,7 +1233,7 @@ Else -> Error(ec, err)
                         break;
                     default:
                         throw new InvalidOperationException(sm.Type + " is not a supported mutation type for rollback.");
-                    
+
                 }
             }
 
@@ -990,7 +1323,7 @@ Else -> Error(ec, err)
                 {
                     _atrId = AtrIds.GetAtrId(id);
                     _atrCollection = collection;
-                    _atrCollectionName = collection.Name; 
+                    _atrCollectionName = collection.Name;
                     _atrScopeName = collection.Scope.Name;
                     _atrBucketName = collection.Scope.Bucket.Name;
                     _atrLongCollectionName = _atrScopeName + "." + _atrCollectionName;
@@ -1004,54 +1337,43 @@ Else -> Error(ec, err)
 
         protected void CheckExpiry()
         {
-            // TODO:  Set and handle ExpirationOvertimeMode
             if (_overallContext.IsExpired)
             {
+                _expirationOvertimeMode = true;
                 throw CreateError(this, ErrorClass.FailExpiry)
                     .RaiseException(ErrorWrapperException.FinalError.TransactionExpired)
                     .Build();
             }
         }
 
-        protected void CheckWriteWriteConflict(TransactionGetResult gr)
+        protected async Task CheckWriteWriteConflict(TransactionGetResult gr)
         {
-            // TODO: implement, see checkATREntryForBlockingDocInternal (AttemptContextReactive.java:704)) for reference
-            /*
-             * CheckWriteWriteConflict
-This logic checks and handles a document X previously read inside a transaction, A, being involved in another transaction B. It takes a TransactionGetResult gr variable.
-
-If gr has no transaction Metadata, it’s fine to proceed.
-            */
-            if (gr.Links == null)
+            //This logic checks and handles a document X previously read inside a transaction, A, being involved in another transaction B. It takes a TransactionGetResult gr variable.
+            if (gr.Links?.AtrBucketName == null)
             {
+                // If gr has no transaction Metadata, it’s fine to proceed.
                 return;
             }
-////Else, if transaction A == transaction B, it’s fine to proceed
 
             if (gr.Links.StagedTransactionId == _overallContext.TransactionId)
             {
+                // Else, if transaction A == transaction B, it’s fine to proceed
                 return;
             }
 
-            if (_overallContext.StartTime.AddSeconds(1) < DateTimeOffset.UtcNow)
-            {
-                // under the threshold, so raise the conflict error
-                throw ErrorBuilder.CreateError(this, ErrorClass.FailWriteWriteConflict)
-                    .Cause(DocumentAlreadyInTransactionException.Create(this, gr))
-                    .RetryTransaction().Build();
-            }
-////Else there’s a write-write conflict.
-////Note that it’s essential not to get blocked permanently here. B could be a crashed pending transaction, in which case X will never be cleaned up. The basic algo is to check B’s ATR entry - if it’s been cleaned up (removed), we can proceed.
-////But, most of the time, B just needs a little time to complete, so there’s no need to check the ATR, it’s just adding unnecessary operations.
-////So there’s a threshold after which we start checking B’s ATR. This is arbitrarily set at one second. This is just measured from the start of the transaction (we don’t try and measure separately times spent blocked by multiple transactions). This is not currently configurable.
-////The algo:
-////If under the threshold, raise Error(FAIL_WRITE_WRITE_CONFLICT, DocumentAlreadyInTransaction, retry=true)
-////Else get B’s ATR entry:
-////Call hook beforeCheckATREntryForBlockingDoc, passing this AttemptContext and the ATR’s key. On error from this
-////Do a lookupIn call to fetch the ATR entry.
-////If the ATR exists but the entry does not, it has been cleaned up. Proceed.
-////Else, including on any error, assume we’re still blocked (CP) and raise
-             
+            // If the transaction has expired, enter ExpiryOvertimeMode and raise Error(ec=FAIL_EXPIRY, raise=TRANSACTION_EXPIRED).
+            CheckExpiry();
+
+            await _testHooks.BeforeCheckAtrEntryForBlockingDoc(this, gr.Id).CAF();
+
+            // Do a lookupIn call to fetch the ATR entry for B.
+            // TODO:  Finish implementing
+            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#CheckWriteWriteConflict
+        }
+
+        internal void SaveErrorWrapper(ErrorWrapperException ex)
+        {
+            _previousErrors.TryAdd(ex.ExceptionNumber, ex);
         }
 
         private enum StagedMutationType

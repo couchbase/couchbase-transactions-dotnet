@@ -1,12 +1,17 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
 
 namespace Couchbase.Transactions.Error.Internal
 {
     internal class ErrorWrapperException : CouchbaseException, IClassifiedTransactionError
     {
+        private static long ExceptionCount = 0;
+
         private readonly AttemptContext _ctx;
+
+        public long ExceptionNumber { get; }
         public ErrorClass CausingErrorClass { get; }
         public bool AutoRollbackAttempt { get; }
         public bool RetryTransaction { get; }
@@ -33,6 +38,7 @@ namespace Couchbase.Transactions.Error.Internal
             Exception cause,
             FinalError finalErrorToRaise)
         {
+            ExceptionNumber = Interlocked.Increment(ref ExceptionCount);
             _ctx = ctx;
             CausingErrorClass = causingErrorClass;
             AutoRollbackAttempt = autoRollbackAttempt;

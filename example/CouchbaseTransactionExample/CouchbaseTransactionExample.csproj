@@ -6,7 +6,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\couchbase-net-client-fortxn\src\Couchbase\Couchbase.csproj" />
     <ProjectReference Include="..\..\src\Couchbase.Transactions\Couchbase.Transactions.csproj" />
   </ItemGroup>
 

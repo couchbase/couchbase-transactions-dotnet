@@ -7,11 +7,11 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase.Transactions", "s
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase.Transactions.Tests.UnitTests", "tests\Couchbase.Transactions.Tests.UnitTests\Couchbase.Transactions.Tests.UnitTests.csproj", "{C8DD540A-D505-48B7-9431-4C07349BDE8D}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase", "..\couchbase-net-client-fortxn\src\Couchbase\Couchbase.csproj", "{8AC96D8C-AC56-4DA9-9DD8-3EDADC9326A7}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CouchbaseTransactionExample", "example\CouchbaseTransactionExample\CouchbaseTransactionExample.csproj", "{F463310C-5A0D-4196-AFFA-AC741E9BC8C8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Couchbase.Transactions.Tests.IntegrationTests", "tests\Couchbase.Transactions.Tests\Couchbase.Transactions.Tests.IntegrationTests\Couchbase.Transactions.Tests.IntegrationTests.csproj", "{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase.Transactions.Tests.IntegrationTests", "tests\Couchbase.Transactions.Tests\Couchbase.Transactions.Tests.IntegrationTests\Couchbase.Transactions.Tests.IntegrationTests.csproj", "{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase", "..\couchbase-net-client\src\Couchbase\Couchbase.csproj", "{C36F020B-87FC-452D-B100-EA7F73B93A14}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -27,10 +27,6 @@ Global
 		{C8DD540A-D505-48B7-9431-4C07349BDE8D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C8DD540A-D505-48B7-9431-4C07349BDE8D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C8DD540A-D505-48B7-9431-4C07349BDE8D}.Release|Any CPU.Build.0 = Release|Any CPU
-		{8AC96D8C-AC56-4DA9-9DD8-3EDADC9326A7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{8AC96D8C-AC56-4DA9-9DD8-3EDADC9326A7}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{8AC96D8C-AC56-4DA9-9DD8-3EDADC9326A7}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{8AC96D8C-AC56-4DA9-9DD8-3EDADC9326A7}.Release|Any CPU.Build.0 = Release|Any CPU
 		{F463310C-5A0D-4196-AFFA-AC741E9BC8C8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{F463310C-5A0D-4196-AFFA-AC741E9BC8C8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F463310C-5A0D-4196-AFFA-AC741E9BC8C8}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -39,6 +35,10 @@ Global
 		{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C36F020B-87FC-452D-B100-EA7F73B93A14}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C36F020B-87FC-452D-B100-EA7F73B93A14}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C36F020B-87FC-452D-B100-EA7F73B93A14}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C36F020B-87FC-452D-B100-EA7F73B93A14}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

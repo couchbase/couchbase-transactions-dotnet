@@ -1,11 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using Couchbase.KeyValue;
 using Couchbase.Management.Buckets;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Xunit;
+using Xunit.Abstractions;
 using BucketNotFoundException = Couchbase.Core.Exceptions.BucketNotFoundException;
 
 namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
@@ -13,9 +16,11 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
     public class ClusterFixture : IAsyncLifetime
     {
         public static readonly string BucketName = "TxnIntegrationTestBucket";
-
+        internal static StringBuilder Logs = new StringBuilder();
         private readonly TestSettings _settings;
         private bool _bucketOpened;
+
+        public static LogLevel LogLevel { get; set; } = LogLevel.Information;
 
         public ClusterOptions ClusterOptions { get; }
 
@@ -71,16 +76,22 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
                 .Get<ClusterOptions>();
         }
 
+        public void DumpLogs(ITestOutputHelper outputHelper, [CallerMemberName] string testName = "")
+        {
+            outputHelper.WriteLine(Logs.ToString());
+        }
+
         public async Task InitializeAsync()
         {
+            var opts = GetClusterOptions().WithLogging(new MemoryLoggerFactory());
             Cluster = await Couchbase.Cluster.ConnectAsync(
                     _settings.ConnectionString,
-                    GetClusterOptions())
+                    opts)
                 .ConfigureAwait(false);
 
-            var bucketSettings = new BucketSettings() 
+            var bucketSettings = new BucketSettings()
                 {
-                    BucketType = BucketType.Couchbase, 
+                    BucketType = BucketType.Couchbase,
                     Name = BucketName,
                     RamQuotaMB = 100,
                     NumReplicas = 0
@@ -114,6 +125,41 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
             }
 
             Cluster.Dispose();
+        }
+
+        private class MemoryLoggerFactory : ILoggerFactory
+        {
+            public void Dispose()
+            {
+            }
+
+            public ILogger CreateLogger(string categoryName) => new MemoryLogger(categoryName);
+
+            public void AddProvider(ILoggerProvider provider)
+            {
+            }
+        }
+
+        private class MemoryLogger : ILogger
+        {
+            private readonly string _categoryName;
+
+            public MemoryLogger(string categoryName)
+            {
+                _categoryName = categoryName;
+            }
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+            {
+                ClusterFixture.Logs.AppendLine($"{logLevel}: {_categoryName} [{eventId}] {formatter(state, exception)}");
+            }
+
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel;
+
+            public IDisposable BeginScope<TState>(TState state)
+            {
+                return new Moq.Mock<IDisposable>().Object;
+            }
         }
     }
 }

@@ -30,14 +30,14 @@ namespace Couchbase.Transactions.Error
     {
         public static ErrorClass Classify(this Exception ex)
         {
-            if (ex is TransactionFailedException)
-            {
-                return ErrorClass.TransactionOperationFailed;
-            }
-
             if (ex is IClassifiedTransactionError classifiedError)
             {
                 return classifiedError.CausingErrorClass;
+            }
+
+            if (ex is TransactionFailedException)
+            {
+                return ErrorClass.TransactionOperationFailed;
             }
 
             if (ex is DocumentAlreadyInTransactionException)

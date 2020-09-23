@@ -11,6 +11,7 @@ using Couchbase.Transactions.Config;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Support;
 using Couchbase.Transactions.Tests.IntegrationTests.Fixtures;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using Xunit;
 using Xunit.Abstractions;
@@ -26,7 +27,66 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         public TransactionsTests(ClusterFixture fixture, ITestOutputHelper outputHelper)
         {
             _fixture = fixture;
+            ClusterFixture.LogLevel = LogLevel.Debug;
             _outputHelper = outputHelper;
+        }
+
+        [Fact]
+        public async Task Basic_Insert_Should_Succeed()
+        {
+            var defaultCollection = await _fixture.GetDefaultCollection();
+            var sampleDoc = new { type = nameof(Basic_Insert_Should_Succeed), foo = "bar", revision = 100 };
+            var docId = nameof(Basic_Insert_Should_Succeed) + Guid.NewGuid().ToString();
+            try
+            {
+                var durability = DurabilityLevel.Majority;
+
+                try
+                {
+                    _ = await defaultCollection.InsertAsync(docId + "testDurability", sampleDoc,
+                        opts => opts.Durability(durability).Expiry(TimeSpan.FromSeconds(10)));
+                }
+                catch (DurabilityImpossibleException)
+                {
+                    // when running on single-node cluster, such as localhost.
+                    durability = DurabilityLevel.None;
+                }
+
+                var txn = Transactions.Create(_fixture.Cluster);
+                var configBuilder = TransactionConfigBuilder.Create();
+                configBuilder.DurabilityLevel(durability);
+
+                var result = await txn.Run(async ctx =>
+                {
+                    var insertResult = await ctx.Insert(defaultCollection, docId, sampleDoc).ConfigureAwait(false);
+                });
+
+                Assert.NotEmpty(result.Attempts);
+                _outputHelper.WriteLine(string.Join(",", result.Attempts));
+                Assert.Contains(result.Attempts, ta => ta.FinalState == AttemptStates.COMMITTED
+                                                       || ta.FinalState == AttemptStates.COMPLETED);
+
+                var postTxnGetResult = await defaultCollection.GetAsync(docId);
+                var postTxnDoc = postTxnGetResult.ContentAs<dynamic>();
+                Assert.Equal("100", postTxnDoc.revision.ToString());
+            }
+            finally
+            {
+                try
+                {
+                    await defaultCollection.RemoveAsync(docId);
+                }
+                catch (Exception e)
+                {
+                    _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
+                    throw;
+                }
+                finally
+                {
+                    _outputHelper.WriteLine("\n\n==== CB Logs ====");
+                    _fixture.DumpLogs(_outputHelper);
+                }
+            }
         }
 
         [Fact]

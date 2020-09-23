@@ -31,6 +31,7 @@ namespace Couchbase.Transactions
             ITypeTranscoder transcoder)
         {
             Id = id;
+            FullyQualifiedId = GetFullyQualifiedId(collection, id);
             _content = content;
             Cas = cas;
             Collection = collection;
@@ -45,6 +46,7 @@ namespace Couchbase.Transactions
         public TransactionLinks? Links { get; }
 
         public string Id { get; }
+        public string FullyQualifiedId { get; }
         public ulong Cas { get; internal set; }
         public DocumentMetadata? DocumentMetadata { get; }
         public ICouchbaseCollection Collection { get; }
@@ -58,6 +60,9 @@ namespace Couchbase.Transactions
             DataFormat = DataFormat.Json,
             TypeCode = TypeCode.Object
         };
+
+        public static string GetFullyQualifiedId(ICouchbaseCollection collection, string id) =>
+            $"{collection.Scope.Bucket.Name}::{collection.Scope.Name}::{collection.Name}::{id}";
 
         public static TransactionGetResult FromInsert(
             ICouchbaseCollection collection,

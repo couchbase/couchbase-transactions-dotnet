@@ -21,9 +21,15 @@ namespace Couchbase.Transactions.Error
             _causingErrorClass = causingErrorClass;
         }
 
-        public static ErrorBuilder CreateError(AttemptContext ctx, ErrorClass causingErrorClass)
+        public static ErrorBuilder CreateError(AttemptContext ctx, ErrorClass causingErrorClass, Exception causingException = null)
         {
-            return new ErrorBuilder(ctx, causingErrorClass);
+            var builder = new ErrorBuilder(ctx, causingErrorClass);
+            if (causingException != null)
+            {
+                builder.Cause(causingException);
+            }
+
+            return builder;
         }
 
         public ErrorBuilder RaiseException(ErrorWrapperException.FinalError finalErrorToRaise)

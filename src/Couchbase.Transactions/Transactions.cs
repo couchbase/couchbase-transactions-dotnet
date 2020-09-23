@@ -21,6 +21,7 @@ namespace Couchbase.Transactions
 {
     public class Transactions : IDisposable
     {
+        public static readonly TimeSpan OpRetryDelay = TimeSpan.FromMilliseconds(3);
         private static long InstancesCreated = 0;
         private static long InstancesCreatedDoingBackgroundCleanup = 0;
         private readonly ICluster _cluster;
@@ -86,7 +87,7 @@ namespace Couchbase.Transactions
             var attempts = new List<TransactionAttempt>();
             result.Attempts = attempts;
 
-            var retryBackoffMilliseconds = 1;
+            var opRetryBackoffMillisecond = 1;
             var randomJitter = new Random();
 
             while (!overallContext.IsExpired)
@@ -104,9 +105,9 @@ namespace Couchbase.Transactions
                         // If err.retry is true, and the transaction has not expired
                         //Apply OpRetryBackoff, with randomized jitter. E.g.each attempt will wait exponentially longer before retrying, up to a limit.
                         var jitter = randomJitter.Next(10);
-                        var delayMs = retryBackoffMilliseconds + jitter;
+                        var delayMs = opRetryBackoffMillisecond + jitter;
                         await Task.Delay(delayMs).CAF();
-                        retryBackoffMilliseconds = Math.Min(retryBackoffMilliseconds * 10, 100);
+                        opRetryBackoffMillisecond = Math.Min(opRetryBackoffMillisecond * 10, 100);
                         //    Go back to the start of this loop, e.g.a new attempt.
                     }
                     else
