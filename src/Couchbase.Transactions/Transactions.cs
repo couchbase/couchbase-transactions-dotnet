@@ -64,10 +64,10 @@ namespace Couchbase.Transactions
         public static Transactions Create(ICluster cluster, TransactionConfigBuilder configBuilder) =>
             Create(cluster, configBuilder.Build());
 
-        public Task<TransactionResult> Run(Func<AttemptContext, Task> transactionLogic) =>
-            Run(transactionLogic, PerTransactionConfigBuilder.Create().Build());
+        public Task<TransactionResult> RunAsync(Func<AttemptContext, Task> transactionLogic) =>
+            RunAsync(transactionLogic, PerTransactionConfigBuilder.Create().Build());
 
-        public async Task<TransactionResult> Run(Func<AttemptContext, Task> transactionLogic, PerTransactionConfig perConfig)
+        public async Task<TransactionResult> RunAsync(Func<AttemptContext, Task> transactionLogic, PerTransactionConfig perConfig)
         {
             // https://hackmd.io/foGjnSSIQmqfks2lXwNp8w?view#The-Core-Loop
             // TODO: placeholder before TXNN-5: Implement Core Loop

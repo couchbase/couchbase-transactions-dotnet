@@ -58,29 +58,29 @@ namespace Couchbase.Transactions.Tests.UnitTests
             TransactionResult tr = null;
             try
             {
-                tr = await transactions.Run(async ctx => 
+                tr = await transactions.RunAsync(async ctx => 
                 {
                     // Inserting a doc:
                     var docId = "test-id";
                     var bucket = await cluster.BucketAsync("test-bucket").ConfigureAwait(false);
                     var collection = bucket.DefaultCollection();
-                    var insertResult = await ctx.Insert(collection, docId, new JObject()).ConfigureAwait(false);
+                    var insertResult = await ctx.InsertAsync(collection, docId, new JObject()).ConfigureAwait(false);
 
                     // Getting documents:
                     var docOpt = await ctx.GetOptional(collection, docId).ConfigureAwait(false);
-                    var doc = await ctx.Get(collection, docId).ConfigureAwait(false);
-                    
+                    var doc = await ctx.GetAsync(collection, docId).ConfigureAwait(false);
+
                     // Replacing a document:
-                    var anotherDoc = await ctx.Get(collection, "anotherDoc").ConfigureAwait(false);
+                    var anotherDoc = await ctx.GetAsync(collection, "anotherDoc").ConfigureAwait(false);
                     var content = anotherDoc.ContentAs<JObject>();
                     content["transactions"] = "are awesome";
-                    await ctx.Replace(anotherDoc, content);
+                    await ctx.ReplaceAsync(anotherDoc, content);
 
                     // Removing a document:
-                    var yetAnotherDoc = await ctx.Get(collection, "yetAnotherDoc)").ConfigureAwait(false);
-                    await ctx.Remove(yetAnotherDoc).ConfigureAwait(false);
+                    var yetAnotherDoc = await ctx.GetAsync(collection, "yetAnotherDoc)").ConfigureAwait(false);
+                    await ctx.RemoveAsync(yetAnotherDoc).ConfigureAwait(false);
 
-                    await ctx.Commit().ConfigureAwait(false);
+                    await ctx.CommitAsync().ConfigureAwait(false);
                     reachedPostCommit = true;
                 });
             }

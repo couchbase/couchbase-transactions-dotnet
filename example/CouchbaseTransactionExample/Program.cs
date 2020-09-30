@@ -26,7 +26,7 @@ namespace CouchbaseTransactionExample
                     .ConfigureAwait(false);
                 var getResultRoundTrip = await collection.GetAsync(sampleDoc.Id).ConfigureAwait(false);
                 var roundTripSampleDoc = getResultRoundTrip.ContentAs<ExampleTransactionDocument>();
-                
+
                 var configBuilder = TransactionConfigBuilder.Create()
                     .DurabilityLevel(DurabilityLevel.None);
 
@@ -36,15 +36,15 @@ namespace CouchbaseTransactionExample
                 }
 
                 var txn = Transactions.Create(cluster, configBuilder.Build());
-                var txnResult = await txn.Run(async ctx =>
+                var txnResult = await txn.RunAsync(async ctx =>
                 {
-                    var getResult = await ctx.Get(collection, sampleDoc.Id).ConfigureAwait(false);
+                    var getResult = await ctx.GetAsync(collection, sampleDoc.Id).ConfigureAwait(false);
                     var docGet = getResult.ContentAs<JObject>();
 
                     docGet["revision"] = docGet["revision"].Value<int>() + 1;
-                    var replaceResult = await ctx.Replace(getResult, docGet).ConfigureAwait(false);
+                    var replaceResult = await ctx.ReplaceAsync(getResult, docGet).ConfigureAwait(false);
 
-                    await ctx.Commit();
+                    await ctx.CommitAsync();
                 }).ConfigureAwait(false);
 
                 Console.Out.WriteLine(txnResult.ToString());

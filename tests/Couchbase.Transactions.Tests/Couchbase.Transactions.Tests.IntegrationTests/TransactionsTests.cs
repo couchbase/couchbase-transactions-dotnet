@@ -56,9 +56,9 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 var configBuilder = TransactionConfigBuilder.Create();
                 configBuilder.DurabilityLevel(durability);
 
-                var result = await txn.Run(async ctx =>
+                var result = await txn.RunAsync(async ctx =>
                 {
-                    var insertResult = await ctx.Insert(defaultCollection, docId, sampleDoc).ConfigureAwait(false);
+                    var insertResult = await ctx.InsertAsync(defaultCollection, docId, sampleDoc).ConfigureAwait(false);
                 });
 
                 Assert.NotEmpty(result.Attempts);
@@ -114,13 +114,13 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 var configBuilder = TransactionConfigBuilder.Create();
                 configBuilder.DurabilityLevel(durability);
 
-                var result = await txn.Run(async ctx =>
+                var result = await txn.RunAsync(async ctx =>
                 {
-                    var getResult = await ctx.Get(defaultCollection, docId);
+                    var getResult = await ctx.GetAsync(defaultCollection, docId);
                     var docGet = getResult.ContentAs<dynamic>();
 
                     docGet.revision = docGet.revision + 1;
-                    var replaceResult = await ctx.Replace(getResult, docGet);
+                    var replaceResult = await ctx.ReplaceAsync(getResult, docGet);
                 });
 
                 Assert.NotEmpty(result.Attempts);
@@ -172,13 +172,13 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 var configBuilder = TransactionConfigBuilder.Create();
                 configBuilder.DurabilityLevel(durability);
 
-                var result = await txn.Run(async ctx =>
+                var result = await txn.RunAsync(async ctx =>
                 {
-                    var getResult = await ctx.Get(defaultCollection, docId);
+                    var getResult = await ctx.GetAsync(defaultCollection, docId);
                     var docGet = getResult.ContentAs<dynamic>();
 
                     docGet.revision = docGet.revision + 1;
-                    await ctx.Remove(getResult);
+                    await ctx.RemoveAsync(getResult);
                 });
 
                 Assert.NotEmpty(result.Attempts);
@@ -231,13 +231,13 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 var configBuilder = TransactionConfigBuilder.Create();
                 configBuilder.DurabilityLevel(durability);
 
-                var result = await txn.Run(async ctx =>
+                var result = await txn.RunAsync(async ctx =>
                 {
-                    var getResult = await ctx.Get(defaultCollection, docId);
+                    var getResult = await ctx.GetAsync(defaultCollection, docId);
                     var docGet = getResult.ContentAs<dynamic>();
 
                     docGet.revision = docGet.revision + 1;
-                    var replaceResult = await ctx.Replace(getResult, docGet);
+                    var replaceResult = await ctx.ReplaceAsync(getResult, docGet);
                     await ctx.Rollback();
                 });
 
@@ -290,14 +290,14 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 configBuilder.DurabilityLevel(durability);
 
                 int attemptCount = 0;
-                var runTask = txn.Run(async ctx =>
+                var runTask = txn.RunAsync(async ctx =>
                 {
                     attemptCount++;
-                    var getResult = await ctx.Get(defaultCollection, docId);
+                    var getResult = await ctx.GetAsync(defaultCollection, docId);
                     var docGet = getResult.ContentAs<dynamic>();
 
                     docGet.revision = docGet.revision + 1;
-                    var replaceResult = await ctx.Replace(getResult, docGet);
+                    var replaceResult = await ctx.ReplaceAsync(getResult, docGet);
                     throw new InvalidOperationException("Forcing rollback.");
                 });
 
@@ -348,14 +348,14 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 configBuilder.DurabilityLevel(durability);
 
                 int attemptCount = 0;
-                var result =await txn.Run(async ctx =>
+                var result =await txn.RunAsync(async ctx =>
                 {
                     attemptCount++;
-                    var getResult = await ctx.Get(defaultCollection, docId);
+                    var getResult = await ctx.GetAsync(defaultCollection, docId);
                     var docGet = getResult.ContentAs<dynamic>();
 
                     docGet.revision = docGet.revision + 1;
-                    var replaceResult = await ctx.Replace(getResult, docGet);
+                    var replaceResult = await ctx.ReplaceAsync(getResult, docGet);
                     if (attemptCount < 3)
                     {
                         throw new TestRetryException("force retry", new InvalidOperationException());

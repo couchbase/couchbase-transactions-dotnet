@@ -83,10 +83,10 @@ namespace Couchbase.Transactions
 
         public async Task<TransactionGetResult?> GetOptional(ICouchbaseCollection collection, string id)
         {
-            // TODO: Update this when adding non-throwing versions to NCBC itself so that GetOptional is the root and Get calls it instead.
+            // TODO: Update this when adding non-throwing versions to NCBC itself so that GetOptional is the root and GetAsync calls it instead.
             try
             {
-                return await Get(collection, id).CAF();
+                return await GetAsync(collection, id).CAF();
             }
             catch (DocumentNotFoundException)
             {
@@ -95,7 +95,7 @@ namespace Couchbase.Transactions
             }
         }
 
-        public async Task<TransactionGetResult?> Get(ICouchbaseCollection collection, string id)
+        public async Task<TransactionGetResult?> GetAsync(ICouchbaseCollection collection, string id)
         {
             DoneCheck();
             CheckErrors();
@@ -317,7 +317,7 @@ namespace Couchbase.Transactions
 
         private StagedMutation FindStaged(TransactionGetResult doc) => FindStaged(doc.Collection, doc.Id);
 
-        public async Task<TransactionGetResult> Replace(TransactionGetResult doc, object content)
+        public async Task<TransactionGetResult> ReplaceAsync(TransactionGetResult doc, object content)
         {
             DoneCheck();
             CheckErrors();
@@ -485,7 +485,7 @@ namespace Couchbase.Transactions
             return specs;
         }
 
-        public async Task<TransactionGetResult> Insert(ICouchbaseCollection collection, string id, object content)
+        public async Task<TransactionGetResult> InsertAsync(ICouchbaseCollection collection, string id, object content)
         {
             // TODO:  How does the user specify expiration?
             DoneCheck();
@@ -768,7 +768,7 @@ namespace Couchbase.Transactions
             return contentBytes;
         }
 
-        public async Task Remove(TransactionGetResult doc)
+        public async Task RemoveAsync(TransactionGetResult doc)
         {
             DoneCheck();
             CheckErrors();
@@ -867,11 +867,11 @@ namespace Couchbase.Transactions
             {
                 case AttemptStates.NOTHING_WRITTEN:
                 case AttemptStates.PENDING:
-                    await Commit().CAF();
+                    await CommitAsync().CAF();
                     break;
             }
         }
-        public async Task Commit()
+        public async Task CommitAsync()
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Commit
             CheckExpiry();
@@ -1026,17 +1026,17 @@ If in ExpiryOvertimeMode -> Error(ec, AttemptExpired(err), rollback=false, raise
 Else FAIL_AMBIGUOUS -> Retry this section from the top, after OpRetryDelay, with ambiguityResolutionMode=true and the current casZero.
 Else FAIL_CAS_MISMATCH -> Doc has changed in-between stage and unstaging.
 If ambiguityResolutionMode=true, then our previous attempt likely succeeded. Unfortunately, we cannot continue as our returned mutationTokens wouldn’t include this mutation. Raise Error(ec, err, rollback=false, raise=TRANSACTION_FAILED_POST_COMMIT).
-Else, another actor has changed the document, breaking the co-operative model (it should not be possible for another transaction to do this). Publish an IllegalDocumentState event to the application (the details of event publishing are platform-specific: on Java, it uses the Java SDK’s event bus). Run this section again from the top, with casZeroMode=true and the current ambiguityResolutionMode and insertMode.
+Else, another actor has changed the document, breaking the co-operative model (it should not be possible for another transaction to do this). Publish an IllegalDocumentState event to the application (the details of event publishing are platform-specific: on Java, it uses the Java SDK’s event bus). RunAsync this section again from the top, with casZeroMode=true and the current ambiguityResolutionMode and insertMode.
 Else FAIL_DOC_NOT_FOUND -> Doc was removed in-between stage and unstaging.
 Something has broken the co-operative model. The transaction must commit, so we will insert the document.
 Publish an IllegalDocumentState event to the application.
-Run this section again from the top, after OpRetryDelay, with insertMode=true, and the current ambiguityResolutionMode and casZeroMode. This will insert the document.
+RunAsync this section again from the top, after OpRetryDelay, with insertMode=true, and the current ambiguityResolutionMode and casZeroMode. This will insert the document.
 Else FAIL_HARD -> Error(ec, err, rollback=false)
 Else FAIL_DOC_ALREADY_EXISTS ->
 If in ambiguityResolutionMode, probably we inserted a doc over a shadow document, and it raised FAIL_AMBIGUOUS but was successful. Resolving this is perhaps impossible - we don’t want to retry the operation, as the document is now committed and another transaction (or KV op) may have started on it. We could reread the doc and check it contains the expected content - but again it may have been involved in another transaction. So, raise Error(ec, cause=err, rollback=false, raise=TRANSACTION_FAILED_POST_COMMIT).
 Else, seems the co-operative model has been broken. The transaction must commit, so we will replace the document.
 Publish an IllegalDocumentState event to the application.
-Run this section again from the top, after OpRetryDelay, with insertMode=false, the current ambiguityResolutionMode, and casZeroMode=true.
+RunAsync this section again from the top, after OpRetryDelay, with insertMode=false, the current ambiguityResolutionMode, and casZeroMode=true.
 Else -> Raise Error(ec, cause=err, rollback=false, raise=TRANSACTION_FAILED_POST_COMMIT). This will result in success being return to the application, but result.unstagingCompleted() will be false.
 The transaction is conceptually committed but unstaging could not complete. Since we have reached the COMMIT point, all transactions will see the post-transaction values now. For many application cases (e.g. those not doing RYOWs) this is not an error at all, and it seems unwise to repeatedly retry this operation if the cluster is currently overwhelmed. Returning success now will make transactions more resilient in the face of e.g. rebalances. The commit will still be completed by the async cleanup process later.
                 */
