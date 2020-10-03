@@ -238,7 +238,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
 
                     docGet.revision = docGet.revision + 1;
                     var replaceResult = await ctx.ReplaceAsync(getResult, docGet);
-                    await ctx.Rollback();
+                    await ctx.RollbackAsync();
                 });
 
                 Assert.NotEmpty(result.Attempts);

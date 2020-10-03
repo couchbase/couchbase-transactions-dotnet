@@ -58,7 +58,7 @@ namespace Couchbase.Transactions.Tests.UnitTests
             TransactionResult tr = null;
             try
             {
-                tr = await transactions.RunAsync(async ctx => 
+                tr = await transactions.RunAsync(async ctx =>
                 {
                     // Inserting a doc:
                     var docId = "test-id";

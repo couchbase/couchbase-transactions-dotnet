@@ -1179,9 +1179,9 @@ Else -> Error(ec, err)
             }
         }
 
-        public Task Rollback() => this.RollbackInternal(true);
+        public Task RollbackAsync() => this.RollbackInternal(true);
 
-        public Task Defer() => throw new NotImplementedException();
+        public Task DeferAsync() => throw new NotImplementedException();
 
         internal TransactionAttempt ToAttempt()
         {
