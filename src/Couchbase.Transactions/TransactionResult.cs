@@ -21,6 +21,8 @@ namespace Couchbase.Transactions
 
         public MutationToken? MutationToken { get; internal set; }
 
+        public bool UnstagingComplete { get; internal set; }
+
         public override string ToString()
         {
             return JObject.FromObject(this).ToString();
