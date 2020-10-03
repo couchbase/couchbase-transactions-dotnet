@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Couchbase.Core;
+using Couchbase.Query;
 using DnsClient.Internal;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -19,7 +20,7 @@ namespace Couchbase.Transactions
 
         public IEnumerable<TransactionAttempt> Attempts { get; internal set; } = Enumerable.Empty<TransactionAttempt>();
 
-        public MutationToken? MutationToken { get; internal set; }
+        public MutationState? MutationState { get; internal set; }
 
         public bool UnstagingComplete { get; internal set; }
 
