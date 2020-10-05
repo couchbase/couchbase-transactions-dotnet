@@ -33,7 +33,7 @@ namespace Couchbase.Transactions.Tests.UnitTests
             try
             {
                 await CanonicalExample();
-            } 
+            }
             catch (Exception e)
             {
                 _outputHelper.WriteLine($"{nameof(Canonical_Example_Compiles)}: Unhandled Exception: {e.ToString()}");
@@ -67,7 +67,7 @@ namespace Couchbase.Transactions.Tests.UnitTests
                     var insertResult = await ctx.InsertAsync(collection, docId, new JObject()).ConfigureAwait(false);
 
                     // Getting documents:
-                    var docOpt = await ctx.GetOptional(collection, docId).ConfigureAwait(false);
+                    var docOpt = await ctx.GetOptionalAsync(collection, docId).ConfigureAwait(false);
                     var doc = await ctx.GetAsync(collection, docId).ConfigureAwait(false);
 
                     // Replacing a document:

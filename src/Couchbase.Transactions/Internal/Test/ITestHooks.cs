@@ -84,6 +84,7 @@ namespace Couchbase.Transactions.Internal.Test
         Task<int?> BeforeGetDocInExistsDuringStagedInsert(AttemptContext self, string id) => Task.FromResult<int?>(0);
 
         Task<bool> HasExpiredClientSideHook(AttemptContext self, string place, [AllowNull] string docId) => Task.FromResult(false);
+        Task<int?> BeforeAtrCommitAmiguityResolution(AttemptContext attemptContext) => Task.FromResult<int?>(0);
     }
 
     /// <summary>

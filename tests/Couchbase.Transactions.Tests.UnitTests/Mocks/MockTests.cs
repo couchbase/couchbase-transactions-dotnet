@@ -36,12 +36,12 @@
 
 ////            var collection = new MockCollection(mockDocs);
 ////            var lookupInResults = await collection.LookupInAsync("id1", spec =>
-////                spec.Get("$document.exptime", true)
-////                    .Get("txn.id.txn", true)
-////                    .Get("$document.exptime_not", true)
-////                    .Get("xattr.does.not.exist", true)
-////                    .Get("doc.path.does.not.exist")
-////                    .Get("baz.omg")
+////                spec.GetAsync("$document.exptime", true)
+////                    .GetAsync("txn.id.txn", true)
+////                    .GetAsync("$document.exptime_not", true)
+////                    .GetAsync("xattr.does.not.exist", true)
+////                    .GetAsync("doc.path.does.not.exist")
+////                    .GetAsync("baz.omg")
 ////                    .GetFull());
 
 ////            foreach (var i in new[] {0, 1, 5, 6})

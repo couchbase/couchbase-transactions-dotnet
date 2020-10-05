@@ -8,9 +8,10 @@ namespace Couchbase.Transactions.Error
 {
     internal class ErrorBuilder
     {
+        public const ErrorBuilder None = null;
         private readonly AttemptContext _ctx;
         private readonly ErrorClass _causingErrorClass;
-        private ErrorWrapperException.FinalError _toRaise = ErrorWrapperException.FinalError.TransactionFailed;
+        private TransactionOperationFailedException.FinalError _toRaise = TransactionOperationFailedException.FinalError.TransactionFailed;
         private bool _rollbackAttempt;
         private bool _retryTransaction;
         private Exception _cause = new Exception("generic exception cause");
@@ -21,7 +22,7 @@ namespace Couchbase.Transactions.Error
             _causingErrorClass = causingErrorClass;
         }
 
-        public static ErrorBuilder CreateError(AttemptContext ctx, ErrorClass causingErrorClass, Exception causingException = null)
+        public static ErrorBuilder CreateError(AttemptContext ctx, ErrorClass causingErrorClass, Exception? causingException = null)
         {
             var builder = new ErrorBuilder(ctx, causingErrorClass);
             if (causingException != null)
@@ -32,7 +33,7 @@ namespace Couchbase.Transactions.Error
             return builder;
         }
 
-        public ErrorBuilder RaiseException(ErrorWrapperException.FinalError finalErrorToRaise)
+        public ErrorBuilder RaiseException(TransactionOperationFailedException.FinalError finalErrorToRaise)
         {
             _toRaise = finalErrorToRaise;
             return this;
@@ -71,6 +72,6 @@ namespace Couchbase.Transactions.Error
             return this;
         }
 
-        public ErrorWrapperException Build() => new ErrorWrapperException(_ctx, _causingErrorClass, _rollbackAttempt, _retryTransaction, _cause, _toRaise);
+        public TransactionOperationFailedException Build() => new TransactionOperationFailedException(_ctx, _causingErrorClass, _rollbackAttempt, _retryTransaction, _cause, _toRaise);
     }
 }

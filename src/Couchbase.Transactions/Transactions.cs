@@ -97,7 +97,7 @@ namespace Couchbase.Transactions
                     await ExecuteApplicationLambda(transactionLogic, overallContext, loggerFactory, attempts).CAF();
                     break;
                 }
-                catch (ErrorWrapperException ex)
+                catch (TransactionOperationFailedException ex)
                 {
                     // If anything above fails with error err
                     if (ex.RetryTransaction && !overallContext.IsExpired)
@@ -120,15 +120,15 @@ namespace Couchbase.Transactions
                             // whether the application wants RYOW, e.g. AT_PLUS. So, success will be returned,
                             // but TransactionResult.unstagingComplete() will be false.
                             // The application can interpret this as it needs.
-                            case ErrorWrapperException.FinalError.TransactionFailedPostCommit:
+                            case TransactionOperationFailedException.FinalError.TransactionFailedPostCommit:
                                 return result;
 
                             // Raise TransactionExpired to application, with a cause of err.cause.
-                            case ErrorWrapperException.FinalError.TransactionExpired:
+                            case TransactionOperationFailedException.FinalError.TransactionExpired:
                                 throw new TransactionExpiredException("Transaction Expired", ex.Cause);
 
                             // Raise TransactionCommitAmbiguous to application, with a cause of err.cause.
-                            case ErrorWrapperException.FinalError.TransactionCommitAmbiguous:
+                            case TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous:
                                 throw new TransactionCommitAmbiguousException("Transaction may have failed to commit.", ex.Cause);
 
                             default:
@@ -172,7 +172,7 @@ namespace Couchbase.Transactions
                     var attempt = ctx.ToAttempt();
                     attempts.Add(attempt);
                 }
-                catch (ErrorWrapperException)
+                catch (TransactionOperationFailedException)
                 {
                     // already a classified error
                     throw;
@@ -192,7 +192,7 @@ namespace Couchbase.Transactions
                     throw error.Build();
                 }
             }
-            catch (ErrorWrapperException ex)
+            catch (TransactionOperationFailedException ex)
             {
                 // If err.rollback is true (it generally will be), auto-rollback the attempt by calling rollbackInternal with appRollback=false.
                 if (ex.AutoRollbackAttempt)

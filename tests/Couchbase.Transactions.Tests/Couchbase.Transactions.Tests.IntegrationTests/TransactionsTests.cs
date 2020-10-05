@@ -61,8 +61,8 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     var insertResult = await ctx.InsertAsync(defaultCollection, docId, sampleDoc).ConfigureAwait(false);
                 });
 
-                Assert.NotEmpty(result.Attempts);
                 _outputHelper.WriteLine(string.Join(",", result.Attempts));
+                Assert.NotEmpty(result.Attempts);
                 Assert.Contains(result.Attempts, ta => ta.FinalState == AttemptStates.COMMITTED
                                                        || ta.FinalState == AttemptStates.COMPLETED);
 
@@ -142,6 +142,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 {
                     _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
                     throw;
+                }
+                finally
+                {
+                    _fixture.DumpLogs(_outputHelper);
                 }
             }
         }
@@ -386,6 +390,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 {
                     _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
                     throw;
+                }
+                finally
+                {
+                    _fixture.DumpLogs(_outputHelper);
                 }
             }
         }

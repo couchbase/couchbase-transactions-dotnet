@@ -6,7 +6,7 @@ namespace Couchbase.Transactions.Error.Attempts
 {
     public class ActiveTransactionRecordsFullException : AttemptException
     {
-        private ActiveTransactionRecordsFullException(AttemptContext ctx, string msg) : base(ctx, msg)
+        internal ActiveTransactionRecordsFullException(AttemptContext ctx, string? msg = null) : base(ctx, msg ?? "Active Transaction Record full")
         {
         }
     }

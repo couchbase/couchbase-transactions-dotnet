@@ -23,13 +23,13 @@ namespace Couchbase.Transactions.Tests.UnitTests
         ////    var ctx = new AttemptContext(new TransactionContext(Guid.NewGuid().ToString(), DateTimeOffset.UtcNow, TransactionConfigBuilder.Create().Build(), null));
         ////    var bucket = await cluster.BucketAsync("test-bucket").ConfigureAwait(false);
         ////    var collection = bucket.DefaultCollection();
-        ////    var notFoundDoc = await ctx.GetOptional(collection, "notFound-id").ConfigureAwait(false);
+        ////    var notFoundDoc = await ctx.GetOptionalAsync(collection, "notFound-id").ConfigureAwait(false);
         ////    Assert.Null(notFoundDoc);
-        ////    var foundDoc = await ctx.GetOptional(collection, "found-id").ConfigureAwait(false);
+        ////    var foundDoc = await ctx.GetOptionalAsync(collection, "found-id").ConfigureAwait(false);
         ////    Assert.NotNull(foundDoc);
         ////    await Assert.ThrowsAsync<DocumentNotFoundException>(async () =>
         ////    {
-        ////        var getThrows = await ctx.Get(collection, "notFound2-id").ConfigureAwait(false);
+        ////        var getThrows = await ctx.GetAsync(collection, "notFound2-id").ConfigureAwait(false);
         ////    });
 
         ////}

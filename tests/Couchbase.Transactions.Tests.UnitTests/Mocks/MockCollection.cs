@@ -1,4 +1,5 @@
-﻿using System;
+﻿#nullable  enable
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -25,7 +26,7 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
             {
                 return Task.FromResult((IGetResult)doc);
             }
-            
+
             throw new DocumentNotFoundException();
         }
 
@@ -112,7 +113,7 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
 
         public uint? Cid { get; }
         public string Name { get; } = "default";
-        public IScope Scope { get; set; } 
+        public IScope Scope { get; set; }
         public IBinaryCollection Binary { get; }
     }
 }

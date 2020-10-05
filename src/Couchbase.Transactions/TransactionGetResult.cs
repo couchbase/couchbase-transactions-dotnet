@@ -20,6 +20,8 @@ namespace Couchbase.Transactions
         private readonly byte[] _content;
         private readonly ITypeTranscoder _transcoder;
 
+        public static readonly TransactionGetResult? Empty = null;
+
         private TransactionGetResult(
             [NotNull] string id,
             [NotNull] byte[] content,

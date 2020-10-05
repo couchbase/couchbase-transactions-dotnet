@@ -5,8 +5,10 @@ using System.Threading;
 
 namespace Couchbase.Transactions.Error.Internal
 {
-    internal class ErrorWrapperException : CouchbaseException, IClassifiedTransactionError
+    public class TransactionOperationFailedException : CouchbaseException, IClassifiedTransactionError
     {
+        public const TransactionOperationFailedException None = null;
+
         private static long ExceptionCount = 0;
 
         private readonly AttemptContext _ctx;
@@ -18,7 +20,7 @@ namespace Couchbase.Transactions.Error.Internal
         public Exception Cause { get; }
         internal FinalError FinalErrorToRaise { get; }
 
-        internal enum FinalError
+        public enum FinalError
         {
             TransactionFailed = 0,
             TransactionExpired = 1,
@@ -30,7 +32,7 @@ namespace Couchbase.Transactions.Error.Internal
             TransactionFailedPostCommit = 3
         }
 
-        public ErrorWrapperException(
+        public TransactionOperationFailedException(
             AttemptContext ctx,
             ErrorClass causingErrorClass,
             bool autoRollbackAttempt,

@@ -6,8 +6,8 @@ namespace Couchbase.Transactions.Error.Attempts
 {
     public class AttemptExpiredException : AttemptException
     {
-        public AttemptExpiredException(AttemptContext ctx, string msg)
-            : base(ctx, msg)
+        public AttemptExpiredException(AttemptContext ctx, string? msg = null)
+            : base(ctx, msg ?? "Attempt Expired")
         {
         }
 
