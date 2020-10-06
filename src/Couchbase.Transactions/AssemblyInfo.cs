@@ -18,4 +18,5 @@ using System.Runtime.InteropServices;
 
 #if !SIGNING
 [assembly: InternalsVisibleTo("Couchbase.Transactions.Tests.UnitTests")]
+[assembly: InternalsVisibleTo("Couchbase.Transactions.FitPerformer")]
 #endif
