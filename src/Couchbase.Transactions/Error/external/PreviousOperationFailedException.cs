@@ -1,9 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 
-namespace Couchbase.Transactions.Error.external
+namespace Couchbase.Transactions.Error.External
 {
     /**
      * A previous operation in the application's lambda failed, and so the currently-attempt operation is also not

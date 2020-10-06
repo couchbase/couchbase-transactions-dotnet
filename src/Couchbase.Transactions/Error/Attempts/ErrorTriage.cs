@@ -5,13 +5,13 @@ using System.Threading.Tasks;
 using Couchbase.Core.Exceptions;
 using Couchbase.Core.Exceptions.KeyValue;
 using Couchbase.KeyValue;
-using Couchbase.Transactions.Error.external;
+using Couchbase.Transactions.Error.External;
 using Couchbase.Transactions.Error.Internal;
 using Couchbase.Transactions.Internal.Test;
 using Microsoft.Extensions.Logging;
 using static Couchbase.Transactions.Error.ErrorBuilder;
 using static Couchbase.Transactions.Error.ErrorClass;
-using static Couchbase.Transactions.Error.Internal.TransactionOperationFailedException.FinalError;
+using static Couchbase.Transactions.Error.External.TransactionOperationFailedException.FinalError;
 
 namespace Couchbase.Transactions.Error.Attempts
 {

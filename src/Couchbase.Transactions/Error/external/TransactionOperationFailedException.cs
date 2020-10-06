@@ -1,9 +1,8 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Text;
 using System.Threading;
+using Couchbase.Transactions.Error.Internal;
 
-namespace Couchbase.Transactions.Error.Internal
+namespace Couchbase.Transactions.Error.External
 {
     public class TransactionOperationFailedException : CouchbaseException, IClassifiedTransactionError
     {
@@ -18,7 +17,7 @@ namespace Couchbase.Transactions.Error.Internal
         public bool AutoRollbackAttempt { get; }
         public bool RetryTransaction { get; }
         public Exception Cause { get; }
-        internal FinalError FinalErrorToRaise { get; }
+        public FinalError FinalErrorToRaise { get; }
 
         public enum FinalError
         {

@@ -11,6 +11,7 @@ using Couchbase.Core.Retry;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.Deferred;
 using Couchbase.Transactions.Error;
+using Couchbase.Transactions.Error.External;
 using Couchbase.Transactions.Error.Internal;
 using Couchbase.Transactions.Internal;
 using Couchbase.Transactions.Internal.Test;
@@ -136,12 +137,12 @@ namespace Couchbase.Transactions
                         }
                     }
                 }
-                catch (Exception notAnErrorWrapperException)
+                catch (Exception notWrapped)
                 {
                     // Assert err is an ErrorWrapper
                     throw new InvalidOperationException(
-                        "All exceptions should have been wrapped in an ErrorWrapperException.",
-                        notAnErrorWrapperException);
+                        $"All exceptions should have been wrapped in an {nameof(TransactionOperationFailedException)}.",
+                        notWrapped);
                 }
             }
 
@@ -232,8 +233,8 @@ namespace Couchbase.Transactions
             // TODO: TXNN-15
         }
 
-        public Task<TransactionResult> Commit(TransactionSerializedContext serialized, PerTransactionConfig perConfig) => throw new NotImplementedException();
-        public Task<TransactionResult> RollBack(TransactionSerializedContext serialized, PerTransactionConfig perConfig) => throw new NotImplementedException();
+        public Task<TransactionResult> CommitAsync(TransactionSerializedContext serialized, PerTransactionConfig perConfig) => throw new NotImplementedException();
+        public Task<TransactionResult> RollBackAsync(TransactionSerializedContext serialized, PerTransactionConfig perConfig) => throw new NotImplementedException();
 
         protected virtual void Dispose(bool disposing)
         {

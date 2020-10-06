@@ -21,7 +21,7 @@ using Couchbase.Transactions.Components;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Error.Attempts;
-using Couchbase.Transactions.Error.external;
+using Couchbase.Transactions.Error.External;
 using Couchbase.Transactions.Error.Internal;
 using Couchbase.Transactions.Internal.Test;
 using Couchbase.Transactions.Log;
@@ -764,7 +764,7 @@ namespace Couchbase.Transactions
                 _triage.ThrowIfCommitWithPreviousErrors(_previousErrors.Values);
             }
 
-            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Commit
+            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#CommitAsync
             CheckExpiry();
             DoneCheck();
             lock (_initAtrLock)
