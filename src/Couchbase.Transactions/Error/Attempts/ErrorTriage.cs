@@ -72,7 +72,7 @@ namespace Couchbase.Transactions.Error.Attempts
             {
                 FailDocNotFound => None,
                 FailHard => Error(ec, err, rollback: false),
-                FailTransient => Error(ec, err, retry:false),
+                FailTransient => Error(ec, err, retry:true),
                 _ => Error(ec, err)
             };
 

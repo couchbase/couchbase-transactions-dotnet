@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
+using Couchbase.KeyValue;
+using Couchbase.Transactions.Log;
 using Newtonsoft.Json;
 
 namespace Couchbase.Transactions.Components
@@ -26,6 +29,13 @@ namespace Couchbase.Transactions.Components
             ScopeName = scp ?? throw new ArgumentNullException(nameof(scp));
             CollectionName = col ?? throw new ArgumentNullException(nameof(col));
             Id = id ?? throw new ArgumentNullException(nameof(id));
+        }
+
+        public async Task<ICouchbaseCollection> GetCollection(ICluster cluster)
+        {
+            var bucket = await cluster.BucketAsync(BucketName).CAF();
+            var scope = bucket.Scope(ScopeName);
+            return scope.Collection(CollectionName);
         }
     }
 }

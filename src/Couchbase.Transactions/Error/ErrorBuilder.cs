@@ -13,8 +13,8 @@ namespace Couchbase.Transactions.Error
         private readonly AttemptContext _ctx;
         private readonly ErrorClass _causingErrorClass;
         private TransactionOperationFailedException.FinalError _toRaise = TransactionOperationFailedException.FinalError.TransactionFailed;
-        private bool _rollbackAttempt;
-        private bool _retryTransaction;
+        private bool _rollbackAttempt = true;
+        private bool _retryTransaction = false;
         private Exception _cause = new Exception("generic exception cause");
 
         private ErrorBuilder(AttemptContext ctx, ErrorClass causingErrorClass)

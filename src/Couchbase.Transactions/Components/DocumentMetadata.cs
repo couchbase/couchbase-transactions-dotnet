@@ -1,15 +1,22 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using Newtonsoft.Json;
 
 namespace Couchbase.Transactions.Components
 {
     public class DocumentMetadata
     {
-        public DocumentMetadata(string? cas, string? revId, ulong? expTime) => (Cas, RevId, ExpTime) = (cas, revId, expTime);
+        [JsonProperty("CAS")]
+        public string? Cas { get; internal set; }
 
-        public string? Cas { get; }
-        public string? RevId { get; }
-        public ulong? ExpTime { get; }
+        [JsonProperty("revid")]
+        public string? RevId { get; internal set; }
+
+        [JsonProperty("exptime")]
+        public ulong? ExpTime { get; internal set; }
+
+        [JsonProperty("value_crc32c")]
+        public string? Crc32c { get; internal set; }
     }
 }

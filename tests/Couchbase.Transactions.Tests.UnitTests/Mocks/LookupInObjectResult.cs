@@ -12,6 +12,8 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
     {
         public List<object> SubDocResults { get; }
 
+        public bool IsDeleted { get; set; }
+
         public LookupInObjectResult(IEnumerable<object> subDocResults)
         {
             SubDocResults = subDocResults?.ToList() ?? new List<object>();

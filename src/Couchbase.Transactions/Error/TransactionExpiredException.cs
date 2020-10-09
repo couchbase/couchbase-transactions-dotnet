@@ -7,7 +7,7 @@ namespace Couchbase.Transactions.Error
 {
     public class TransactionExpiredException : TransactionFailedException, IClassifiedTransactionError
     {
-        public TransactionExpiredException(string message, Exception innerException) : base(message, innerException)
+        public TransactionExpiredException(string message, Exception innerException, TransactionResult result) : base(message, innerException, result)
         {
         }
 

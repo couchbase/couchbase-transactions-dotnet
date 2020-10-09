@@ -36,6 +36,8 @@ namespace Couchbase.Transactions.Support
         public const string AttemptId = TransactionInterfacePrefix + "id.atmpt";
         public const string AtrId = TransactionInterfacePrefix + "atr.id";
         public const string AtrBucketName = TransactionInterfacePrefix + "atr.bkt";
+
+        public const string AtrScopeName = TransactionInterfacePrefix + "atr.scp";
         // The current plan is:
         // 6.5 and below: write metadata docs to the default collection
         // 7.0 and above: write them to the system collection, and migrate them over
@@ -43,6 +45,7 @@ namespace Couchbase.Transactions.Support
         public const string AtrCollName = TransactionInterfacePrefix + "atr.coll";
         public const string StagedData = TransactionInterfacePrefix + "op.stgd";
         public const string Type = TransactionInterfacePrefix + "op.type";
+        public const string Crc32 = TransactionInterfacePrefix + "op.crc32";
 
         public const string PreTxnCas = TransactionRestorePrefix + "CAS";
         public const string PreTxnRevid = TransactionRestorePrefix + "revid";

@@ -17,6 +17,7 @@ using Couchbase.Core.IO.Transcoders;
 using Couchbase.Core.Logging;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.ActiveTransactionRecords;
+using Couchbase.Transactions.Cleanup;
 using Couchbase.Transactions.Components;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.Error;
@@ -128,16 +129,18 @@ namespace Couchbase.Transactions
                 }
             }
 
-            // Do GetAsync a document with MAV logic section
-            await _testHooks.BeforeDocGet(this, id).CAF();
 
             try
             {
                 try
                 {
+                    // Do GetAsync a document with MAV logic section
+                    await _testHooks.BeforeDocGet(this, id).CAF();
+
                     // Do a Sub-Document lookup, getting all transactional metadata, the “$document” virtual xattr,
                     // and the document’s body. Timeout is set as in Timeouts.
                     //  TODO: Added for Protocol 2.0: set accessDeleted=true.
+                    // TODO: use DocumentWithTransactionMetadata.LookupAsync
                     var docWithMeta = await LookupDocWithMetadata(collection, id).CAF();
                     var doc = docWithMeta.doc;
                     // check the transactional metadata to see if the doc is already involved in a transaction.
@@ -259,7 +262,9 @@ namespace Couchbase.Transactions
                         .Get(TransactionFields.Type, true) // 7
                         .Get("$document", true) //  8
                         .GetFull(), // 9
-                opts => opts.Timeout(_config.KeyValueTimeout)
+                opts =>
+                    opts.Timeout(_config.KeyValueTimeout)
+                        .AccessDeleted(true)
             ).CAF();
 
             return (doc, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
@@ -320,27 +325,7 @@ namespace Couchbase.Transactions
                 {
                     await _testHooks.BeforeStagedReplace(this, doc.Id);
                     var contentBytes = GetContentBytes(content);
-                    var specs = CreateMutationOps("replace");
-                    specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData, contentBytes, isXattr: true));
-
-                    if (doc.DocumentMetadata != null)
-                    {
-                        var dm = doc.DocumentMetadata;
-                        if (dm.Cas != null)
-                        {
-                            specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnCas, dm.Cas, isXattr: true));
-                        }
-
-                        if (dm.RevId != null)
-                        {
-                            specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnRevid, dm.RevId, isXattr: true));
-                        }
-
-                        if (dm.ExpTime != null)
-                        {
-                            specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnExptime, dm.ExpTime, isXattr: true));
-                        }
-                    }
+                    var specs = CreateMutationOps("replace", contentBytes, doc.DocumentMetadata);
 
                     var opts = new MutateInOptions()
                         .Cas(doc.Cas)
@@ -400,7 +385,7 @@ namespace Couchbase.Transactions
             }
         }
 
-        private List<MutateInSpec> CreateMutationOps(string op)
+        private List<MutateInSpec> CreateMutationOps(string op, byte[] contentBytes, DocumentMetadata? dm = null)
         {
             var specs = new List<MutateInSpec>
             {
@@ -408,17 +393,37 @@ namespace Couchbase.Transactions
                     createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.AttemptId, _attemptId, createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.AtrId, _atrId, createPath: true, isXattr: true),
+                MutateInSpec.Upsert(TransactionFields.AtrScopeName, _atrScopeName, createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.AtrBucketName, _atrBucketName, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.AtrCollName, _atrLongCollectionName, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.Type, op, createPath: true, isXattr: true),
+                MutateInSpec.Upsert(TransactionFields.Crc32, MutationMacro.ValueCRC32c, createPath: true, isXattr: true),
+                MutateInSpec.Upsert(TransactionFields.StagedData, contentBytes, isXattr: true),
             };
+
+            if (dm != null)
+            {
+                if (dm.Cas != null)
+                {
+                    specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnCas, dm.Cas, isXattr: true));
+                }
+
+                if (dm.RevId != null)
+                {
+                    specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnRevid, dm.RevId, isXattr: true));
+                }
+
+                if (dm.ExpTime != null)
+                {
+                    specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnExptime, dm.ExpTime, isXattr: true));
+                }
+            }
 
             return specs;
         }
 
         public async Task<TransactionGetResult> InsertAsync(ICouchbaseCollection collection, string id, object content)
         {
-            // TODO:  How does the user specify expiration?
             DoneCheck();
             CheckExpiry();
             InitAtrIfNeeded(collection, id);
@@ -449,8 +454,7 @@ namespace Couchbase.Transactions
                         await _testHooks.BeforeStagedInsert(this, id).CAF();
 
                         var contentBytes = GetContentBytes(content);
-                        List<MutateInSpec> specs = CreateMutationOps("insert");
-                        specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData, contentBytes, isXattr: true));
+                        List<MutateInSpec> specs = CreateMutationOps("insert", contentBytes: contentBytes);
 
                         var mutateResult = await collection.MutateInAsync(id, specs, opts =>
                         {
@@ -466,8 +470,7 @@ namespace Couchbase.Transactions
 
                             opts.Durability(_effectiveDurabilityLevel);
 
-                            // TODO: accessDeleted = true (needs NCBC-2573)
-                            // TODO: createAsDeleted = true (needs NCBC-2573)
+                            opts.CreateAsDeleted(true);
                         }).CAF();
 
                         var getResult = TransactionGetResult.FromInsert(
@@ -516,9 +519,7 @@ namespace Couchbase.Transactions
                                             doc.Exists(docWithMeta.atrIdIndex) &&
                                             !string.IsNullOrEmpty(doc.ContentAs<string>(docWithMeta.atrIdIndex));
 
-                                        // TODO: handle tombstone detection when NCBC-2573 is done.
-                                        var docIsTombstone = false;
-                                        if (docIsTombstone && !docInATransaction)
+                                        if (doc.IsDeleted && !docInATransaction)
                                         {
                                             // If the doc is a tombstone and not in any transaction
                                             // -> It’s ok to go ahead and overwrite.
@@ -612,7 +613,8 @@ namespace Couchbase.Transactions
                         ).CAF();
 
                         var lookupInResult = await collection.LookupInAsync(_atrId,
-                            specs => specs.Get($"{prefix}.{TransactionFields.AtrFieldStartTimestamp}", isXattr: true));
+                            specs => specs.Get($"{prefix}.{TransactionFields.AtrFieldStartTimestamp}", isXattr: true),
+                            opts => opts.AccessDeleted(true));
                         var fetchedCas = lookupInResult.ContentAs<string>(0);
                         var getResult = await collection.GetAsync(_atrId).CAF();
                         var atr = getResult.ContentAs<dynamic>();
@@ -680,35 +682,15 @@ namespace Couchbase.Transactions
                 try
                 {
                     await _testHooks.BeforeStagedRemove(this, doc.Id).CAF();
-                    var specs = CreateMutationOps(op: "remove");
-                    specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData,
-                        TransactionFields.StagedDataRemoveKeyword, isXattr: true));
-
-                    if (doc.DocumentMetadata != null)
-                    {
-                        var dm = doc.DocumentMetadata;
-                        if (dm.Cas != null)
-                        {
-                            specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnCas, dm.Cas, isXattr: true));
-                        }
-
-                        if (dm.RevId != null)
-                        {
-                            specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnRevid, dm.RevId, isXattr: true));
-                        }
-
-                        if (dm.ExpTime != null)
-                        {
-                            specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnExptime, dm.ExpTime, isXattr: true));
-                        }
-                    }
+                    var contentBytes = GetContentBytes(TransactionFields.StagedDataRemoveKeyword);
+                    var specs = CreateMutationOps(op: "remove", contentBytes, doc.DocumentMetadata);
 
                     var opts = new MutateInOptions()
                         .Cas(doc.Cas)
+                        .CreateAsDeleted(true)
                         .StoreSemantics(StoreSemantics.Replace)
                         .Durability(_effectiveDurabilityLevel);
 
-                    // TODO: set accessDeleted after NCBC-2573 is done.
                     var updatedDoc = await doc.Collection.MutateInAsync(doc.Id, specs, opts).CAF();
                     await _testHooks.AfterStagedRemoveComplete(this, doc.Id).CAF();
 
@@ -906,10 +888,8 @@ namespace Couchbase.Transactions
                     else
                     {
                         mutateResult = await sm.Doc.Collection.MutateInAsync(sm.Doc.Id, specs =>
-                                    specs
-                                        // NCBC-2639
-                                        ////.Upsert(TransactionFields.TransactionInterfacePrefixOnly, (string?)null,
-                                        ////    isXattr: true)
+                                    specs.Upsert(TransactionFields.TransactionInterfacePrefixOnly, string.Empty,
+                                            isXattr: true, createPath: true)
                                         .Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
                                         .SetDoc(finalDoc),
                                 opts => opts.Cas(cas).StoreSemantics(StoreSemantics.Replace))
@@ -975,7 +955,7 @@ namespace Couchbase.Transactions
         {
             _ = _atrCollection ??
                 throw new InvalidOperationException($"{nameof(SetAtrCommit)} without initializing ATR.");
-            var prefix = $"attempts.{_attemptId}";
+            var prefix = $"{TransactionFields.AtrFieldAttempts}.{_attemptId}";
             await RepeatUntilSuccessOrThrow(async () =>
             {
                 try
@@ -1033,9 +1013,10 @@ namespace Couchbase.Transactions
                 try
                 {
                     CheckExpiry();
-                    await _testHooks.BeforeAtrCommitAmiguityResolution(this).CAF();
+                    await _testHooks.BeforeAtrCommitAmbiguityResolution(this).CAF();
                     var lookupInResult = await _atrCollection!.LookupInAsync(_atrId!,
-                            specs => specs.Get($"{prefix}.{TransactionFields.AtrFieldStatus}", isXattr: true))
+                            specs => specs.Get($"{prefix}.{TransactionFields.AtrFieldStatus}", isXattr: true),
+                            opts => opts.AccessDeleted(true))
                         .CAF();
                     var refreshedStatus = lookupInResult.ContentAs<string>(0);
                     if (!Enum.TryParse<AttemptStates>(refreshedStatus, out var parsedRefreshStatus))
@@ -1293,9 +1274,7 @@ namespace Couchbase.Transactions
 
                     var specs = new MutateInSpec[]
                     {
-                        // NCBC-2639
-                        ////.Upsert(TransactionFields.TransactionInterfacePrefixOnly, (string?)null,
-                        ////    isXattr: true)
+                        MutateInSpec.Upsert(TransactionFields.TransactionInterfacePrefixOnly, string.Empty, isXattr: true, createPath: true),
                         MutateInSpec.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
                     };
 
@@ -1352,11 +1331,11 @@ namespace Couchbase.Transactions
 
                     var specs = new MutateInSpec[]
                     {
-                        // NCBC-2639
-                        ////.Upsert(TransactionFields.TransactionInterfacePrefixOnly, (string?)null,
-                        ////    isXattr: true)
+                        MutateInSpec.Upsert(TransactionFields.TransactionInterfacePrefixOnly, string.Empty,
+                            isXattr: true, createPath: true),
                         MutateInSpec.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
                     };
+
                     var mutateInResult = sm.Doc.Collection.MutateInAsync(sm.Doc.Id, specs, opts).CAF();
                     await _testHooks.AfterRollbackReplaceOrRemove(this, sm.Doc.Id).CAF();
                     return RepeatAction.NoRepeat;
@@ -1514,6 +1493,26 @@ namespace Couchbase.Transactions
 
         private Task OpRetryDelay() => Task.Delay(Transactions.OpRetryDelay);
 
+        internal CleanupRequest? GetCleanupRequest()
+        {
+            if (_atrId == null || _atrCollection == null)
+            {
+                // nothing to clean up
+                return null;
+            }
+
+            return new CleanupRequest(
+                attemptId: _attemptId,
+                atrId: _atrId,
+                atrCollection: _atrCollection,
+                insertedIds: StagedInserts.Select(sm => sm.AsDocRecord()).ToList(),
+                replacedIds: StagedReplaces.Select(sm => sm.AsDocRecord()).ToList(),
+                removedIds: StagedRemoves.Select(sm => sm.AsDocRecord()).ToList(),
+                state: _state,
+                whenReadyToBeProcessed: _overallContext.AbsoluteExpiration.AddSeconds(10)
+            );
+        }
+
         private enum StagedMutationType
         {
             Undefined = 0,
@@ -1544,6 +1543,11 @@ namespace Couchbase.Transactions
                     new JProperty(TransactionFields.AtrFieldPerDocCollection, Doc.Collection.Name)
                 );
 
+            public DocRecord AsDocRecord() => new DocRecord(
+                bkt: Doc.Collection.Scope.Bucket.Name,
+                scp: Doc.Collection.Scope.Name,
+                col: Doc.Collection.Name,
+                id: Doc.Id);
         }
     }
 }

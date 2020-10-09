@@ -6,8 +6,11 @@ namespace Couchbase.Transactions.Error
 {
     public class TransactionFailedException : CouchbaseException
     {
-        public TransactionFailedException(string message, Exception innerException) : base(message, innerException)
+        public TransactionResult Result { get; }
+
+        public TransactionFailedException(string message, Exception innerException, TransactionResult result) : base(message, innerException)
         {
+            Result = result;
         }
     }
 }

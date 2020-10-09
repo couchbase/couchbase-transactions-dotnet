@@ -29,7 +29,7 @@ namespace Couchbase.Transactions.Components
             StagedContent?.Equals(ActiveTransactionRecord.Remove, StringComparison.Ordinal) == true;
 
         public bool HasStagedWrite => StagedAttemptId != null;
-        
+
         public TransactionLinks(
             string? stagedContent,
             string? atrId,

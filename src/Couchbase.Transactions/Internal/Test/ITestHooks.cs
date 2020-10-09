@@ -13,7 +13,7 @@ namespace Couchbase.Transactions.Internal.Test
     /// library.
     /// </summary>
     /// <remarks>All methods have default no-op implementations.</remarks>
-    public interface ITestHooks
+    internal interface ITestHooks
     {
         Task<int?> BeforeAtrCommit(AttemptContext self) => Task.FromResult<int?>(0);
 
@@ -84,7 +84,7 @@ namespace Couchbase.Transactions.Internal.Test
         Task<int?> BeforeGetDocInExistsDuringStagedInsert(AttemptContext self, string id) => Task.FromResult<int?>(0);
 
         Task<bool> HasExpiredClientSideHook(AttemptContext self, string place, [AllowNull] string docId) => Task.FromResult(false);
-        Task<int?> BeforeAtrCommitAmiguityResolution(AttemptContext attemptContext) => Task.FromResult<int?>(0);
+        Task<int?> BeforeAtrCommitAmbiguityResolution(AttemptContext attemptContext) => Task.FromResult<int?>(0);
     }
 
     /// <summary>
@@ -93,5 +93,14 @@ namespace Couchbase.Transactions.Internal.Test
     internal class DefaultTestHooks : ITestHooks
     {
         public static readonly ITestHooks Instance = new DefaultTestHooks();
+    }
+
+    /// <summary>
+    /// Implementation of ITestHooks that allows individual delegates per hook.
+    /// </summary>
+    public class DelegateTestHooks : ITestHooks
+    {
+        public Func<AttemptContext, string, Task<int?>> BeforeDocGetImpl { get; set; } = DefaultTestHooks.Instance.BeforeDocGet;
+        public Task<int?> BeforeDocGet(AttemptContext self, string id) => BeforeDocGetImpl(self, id);
     }
 }

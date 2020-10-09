@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
@@ -8,6 +9,7 @@ using Couchbase.Core.Exceptions;
 using Couchbase.Core.IO.Transcoders;
 using Couchbase.Core.Logging;
 using Couchbase.Core.Retry;
+using Couchbase.Transactions.Cleanup;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.Deferred;
 using Couchbase.Transactions.Error;
@@ -20,7 +22,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Couchbase.Transactions
 {
-    public class Transactions : IDisposable
+    public class Transactions : IDisposable, IAsyncDisposable
     {
         public static readonly TimeSpan OpRetryDelay = TimeSpan.FromMilliseconds(3);
         private static long InstancesCreated = 0;
@@ -29,6 +31,9 @@ namespace Couchbase.Transactions
         private bool _disposedValue;
         private readonly IRedactor _redactor;
         private readonly ILoggerFactory loggerFactory;
+        ////private readonly CleanupWorkQueue _cleanupWorkQueue;
+        private readonly ConcurrentQueue<CleanupRequest> _cleanupRequests = new ConcurrentQueue<CleanupRequest>();
+        private readonly Cleaner _cleaner;
 
         public TransactionConfig Config { get; }
 
@@ -38,7 +43,21 @@ namespace Couchbase.Transactions
 
         internal ICluster Cluster => _cluster;
 
-        public ITestHooks TestHooks { get; set; } = DefaultTestHooks.Instance;
+        internal ITestHooks TestHooks { get; set; } = DefaultTestHooks.Instance;
+        ////public ICleanupTestHooks CleanupTestHooks
+        ////{
+        ////    get => _cleanupWorkQueue.TestHooks;
+        ////    set
+        ////    {
+        ////        _cleanupWorkQueue.TestHooks = value;
+        ////    }
+        ////}
+
+        internal ICleanupTestHooks CleanupTestHooks
+        {
+            get => _cleaner.TestHooks;
+            set => _cleaner.TestHooks = value;
+        }
 
         private Transactions(ICluster cluster, TransactionConfig config)
         {
@@ -53,9 +72,11 @@ namespace Couchbase.Transactions
                 Interlocked.Increment(ref InstancesCreatedDoingBackgroundCleanup);
             }
 
-           loggerFactory = _cluster.ClusterServices.GetService(typeof(ILoggerFactory)) as ILoggerFactory;
+            loggerFactory = _cluster.ClusterServices?.GetService(typeof(ILoggerFactory)) as ILoggerFactory ??
+                            NullLoggerFactory.Instance;
+           ////_cleanupWorkQueue = new CleanupWorkQueue(_cluster, Config.KeyValueTimeout, _typeTranscoder);
+           _cleaner = new Cleaner(cluster, Config.KeyValueTimeout, _typeTranscoder);
 
-            // TODO: kick off background cleanup "thread", if necessary
             // TODO: whatever the equivalent of 'cluster.environment().eventBus().publish(new TransactionsStarted(config));' is.
         }
 
@@ -71,8 +92,6 @@ namespace Couchbase.Transactions
         public async Task<TransactionResult> RunAsync(Func<AttemptContext, Task> transactionLogic, PerTransactionConfig perConfig)
         {
             // https://hackmd.io/foGjnSSIQmqfks2lXwNp8w?view#The-Core-Loop
-            // TODO: placeholder before TXNN-5: Implement Core Loop
-            // real loop will run multiple attempts with retries
 
             var overallContext = new TransactionContext(
                 transactionId: Guid.NewGuid().ToString(),
@@ -80,9 +99,6 @@ namespace Couchbase.Transactions
                 config: Config,
                 perConfig: perConfig
                 );
-
-            ILoggerFactory? loggerFactory = null;
-
 
             var result = new TransactionResult() { TransactionId =  overallContext.TransactionId };
             var attempts = new List<TransactionAttempt>();
@@ -122,18 +138,19 @@ namespace Couchbase.Transactions
                             // but TransactionResult.unstagingComplete() will be false.
                             // The application can interpret this as it needs.
                             case TransactionOperationFailedException.FinalError.TransactionFailedPostCommit:
+                                result.UnstagingComplete = false;
                                 return result;
 
                             // Raise TransactionExpired to application, with a cause of err.cause.
                             case TransactionOperationFailedException.FinalError.TransactionExpired:
-                                throw new TransactionExpiredException("Transaction Expired", ex.Cause);
+                                throw new TransactionExpiredException("Transaction Expired", ex.Cause, result);
 
                             // Raise TransactionCommitAmbiguous to application, with a cause of err.cause.
                             case TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous:
-                                throw new TransactionCommitAmbiguousException("Transaction may have failed to commit.", ex.Cause);
+                                throw new TransactionCommitAmbiguousException("Transaction may have failed to commit.", ex.Cause, result);
 
                             default:
-                                throw new TransactionFailedException("Transaction failed.", ex.Cause);
+                                throw new TransactionFailedException("Transaction failed.", ex.Cause, result);
                         }
                     }
                 }
@@ -196,41 +213,60 @@ namespace Couchbase.Transactions
             catch (TransactionOperationFailedException ex)
             {
                 // If err.rollback is true (it generally will be), auto-rollback the attempt by calling rollbackInternal with appRollback=false.
-                if (ex.AutoRollbackAttempt)
+                try
                 {
-                    try
+                    if (ex.AutoRollbackAttempt)
                     {
-                        await ctx.RollbackInternal(isAppRollback: false).CAF();
+                        try
+                        {
+                            await ctx.RollbackInternal(isAppRollback: false).CAF();
+                        }
+                        catch
+                        {
+                            // if rollback failed, raise the original error, but with retry disabled:
+                            // Error(ec = err.ec, cause = err.cause, raise = err.raise
+                            throw ErrorBuilder.CreateError(ctx, ex.CausingErrorClass)
+                                .Cause(ex.Cause)
+                                .DoNotRollbackAttempt()
+                                .Build();
+                        }
                     }
-                    catch
-                    {
-                        // if rollback failed, raise the original error, but with retry disabled:
-                        // Error(ec = err.ec, cause = err.cause, raise = err.raise
-                        throw ErrorBuilder.CreateError(ctx, ex.CausingErrorClass)
-                            .Cause(ex.Cause)
-                            .DoNotRollbackAttempt()
-                            .Build();
-                    }
-                    finally
-                    {
-                        // Whether this fails or succeeds
-                        //  Add a TransactionAttempt that will be returned in the final TransactionResult.
-                        //  AddCleanupRequest, if the cleanup thread is configured to be running.
-                        var errAttempt = ctx.ToAttempt();
-                        errAttempt.TermindatedByException = ex;
-                        attempts.Add(errAttempt);
-                        AddCleanupRequest();
-                    }
+                }
+                finally
+                {
+                    // Whether this fails or succeeds
+                    //  Add a TransactionAttempt that will be returned in the final TransactionResult.
+                    //  AddCleanupRequest, if the cleanup thread is configured to be running.
+                    var errAttempt = ctx.ToAttempt();
+                    errAttempt.TermindatedByException = ex;
+                    attempts.Add(errAttempt);
                 }
 
                 // Else if it succeeded or no rollback was performed, propagate err up.
                 throw;
             }
+            finally
+            {
+                AddCleanupRequest(ctx);
+            }
         }
 
-        private void AddCleanupRequest()
+        private void AddCleanupRequest(AttemptContext ctx)
         {
-            // TODO: TXNN-15
+            // TODO: Implement config option for background cleanup.
+            var cleanupRequest = ctx.GetCleanupRequest();
+            if (cleanupRequest != null)
+            {
+                _cleanupRequests.Enqueue(cleanupRequest);
+            }
+        }
+
+        private async Task CleanupAttempts()
+        {
+            foreach (var cleanupRequest in _cleanupRequests)
+            {
+                await _cleaner.ProcessCleanupRequest(cleanupRequest).CAF();
+            }
         }
 
         public Task<TransactionResult> CommitAsync(TransactionSerializedContext serialized, PerTransactionConfig perConfig) => throw new NotImplementedException();
@@ -263,6 +299,12 @@ namespace Couchbase.Transactions
             // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
             Dispose(disposing: true);
             GC.SuppressFinalize(this);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await CleanupAttempts().CAF();
+            Dispose();
         }
     }
 }

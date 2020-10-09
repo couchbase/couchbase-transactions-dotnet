@@ -43,18 +43,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var docId = nameof(Basic_Insert_Should_Succeed) + Guid.NewGuid().ToString();
             try
             {
-                var durability = DurabilityLevel.Majority;
-
-                try
-                {
-                    _ = await defaultCollection.InsertAsync(docId + "testDurability", sampleDoc,
-                        opts => opts.Durability(durability).Expiry(TimeSpan.FromSeconds(10)));
-                }
-                catch (DurabilityImpossibleException)
-                {
-                    // when running on single-node cluster, such as localhost.
-                    durability = DurabilityLevel.None;
-                }
+                var durability = await InsertAndDetermineDurability(defaultCollection, docId + "_testDurability", sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -101,18 +90,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = DurabilityLevel.Majority;
-
-                try
-                {
-                    _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability));
-                }
-                catch (DurabilityImpossibleException)
-                {
-                    // when running on single-node cluster, such as localhost.
-                    durability = DurabilityLevel.None;
-                    _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability));
-                }
+                var durability = await InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -135,6 +113,8 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 var postTxnGetResult = await defaultCollection.GetAsync(docId);
                 var postTxnDoc = postTxnGetResult.ContentAs<dynamic>();
                 Assert.Equal("101", postTxnDoc.revision.ToString());
+
+                await txn.DisposeAsync();
             }
             finally
             {
@@ -163,18 +143,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = DurabilityLevel.Majority;
-
-                try
-                {
-                    _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability));
-                }
-                catch (DurabilityImpossibleException)
-                {
-                    // when running on single-node cluster, such as localhost.
-                    durability = DurabilityLevel.None;
-                    _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability));
-                }
+                var durability = await InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -222,18 +191,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = DurabilityLevel.Majority;
-
-                try
-                {
-                    _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability));
-                }
-                catch (DurabilityImpossibleException)
-                {
-                    // when running on single-node cluster, such as localhost.
-                    durability = DurabilityLevel.None;
-                    _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability));
-                }
+                var durability = await InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -280,18 +238,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = DurabilityLevel.Majority;
-
-                try
-                {
-                    _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability));
-                }
-                catch (DurabilityImpossibleException)
-                {
-                    // when running on single-node cluster, such as localhost.
-                    durability = DurabilityLevel.None;
-                    _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability));
-                }
+                var durability = await InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -328,6 +275,25 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     throw;
                 }
             }
+        }
+
+        private static async Task<DurabilityLevel> InsertAndDetermineDurability(ICouchbaseCollection defaultCollection, string docId,
+            object sampleDoc)
+        {
+            var durability = DurabilityLevel.Majority;
+
+            try
+            {
+                _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability).Expiry(TimeSpan.FromMinutes(10)));
+            }
+            catch (DurabilityImpossibleException)
+            {
+                // when running on single-node cluster, such as localhost.
+                durability = DurabilityLevel.None;
+                _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability).Expiry(TimeSpan.FromMinutes(10)));
+            }
+
+            return durability;
         }
 
         [Fact]
@@ -407,6 +373,76 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 : base(message, inner)
             {
             }
+        }
+
+        [Fact]
+        public async Task Get_Repeated_Failures_Should_Throw_TransactionFailed()
+        {
+            var defaultCollection = await _fixture.GetDefaultCollection();
+            var docId = Guid.NewGuid().ToString();
+
+            var txn = Transactions.Create(_fixture.Cluster);
+            int attempts = 0;
+            txn.TestHooks = new DelegateTestHooks()
+            {
+                BeforeDocGetImpl = (ctx, id) => throw new InternalIntegrationTestException()
+                    {
+                        CausingErrorClass = attempts++ < 5 ? ErrorClass.FailTransient : ErrorClass.FailOther
+                    }
+            };
+
+            var runTask = txn.RunAsync(async ctx =>
+            {
+                var getResult = await ctx.GetAsync(defaultCollection, docId);
+                var docGet = getResult?.ContentAs<dynamic>();
+                Assert.False(true, "Should never have reached here.");
+            });
+
+            var transactionFailedException = await Assert.ThrowsAsync<TransactionFailedException>(() => runTask);
+            Assert.NotNull(transactionFailedException.Result);
+            Assert.NotEmpty(transactionFailedException.Result.Attempts);
+            Assert.NotInRange(transactionFailedException.Result.Attempts.Count(), 0, 2);
+        }
+
+        [Fact]
+        public async Task Get_Should_Succeed_After_Two_Failures()
+        {
+            var defaultCollection = await _fixture.GetDefaultCollection();
+            var docId = Guid.NewGuid().ToString();
+            var sampleDoc = new { type = nameof(Get_Should_Succeed_After_Two_Failures), foo = "bar", revision = 100 };
+            var durability = await InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+
+            var txn = Transactions.Create(_fixture.Cluster);
+            var configBuilder = TransactionConfigBuilder.Create();
+            configBuilder.DurabilityLevel(durability);
+            int attempts = 0;
+            txn.TestHooks = new DelegateTestHooks()
+            {
+                BeforeDocGetImpl = (ctx, id) =>
+                {
+                    if (attempts++ < 2)
+                    {
+                        _outputHelper.WriteLine(nameof(ITestHooks.BeforeDocGet) + " fail " + attempts);
+                        throw new InternalIntegrationTestException() { CausingErrorClass = ErrorClass.FailTransient };
+                    }
+
+                    _outputHelper.WriteLine(nameof(ITestHooks.BeforeDocGet) + " pass after " + attempts);
+                    return Task.FromResult<int?>(2);
+                }
+            };
+
+            bool getSucceeded = false;
+            var result = await txn.RunAsync(async ctx =>
+            {
+                var getResult = await ctx.GetAsync(defaultCollection, docId);
+                var docGet = getResult?.ContentAs<dynamic>();
+                getSucceeded = true;
+            });
+
+            Assert.NotNull(result);
+            Assert.True(getSucceeded);
+            Assert.NotEqual(0, attempts);
+            Assert.NotInRange(result.Attempts.Count(), 0, 2);
         }
     }
 }

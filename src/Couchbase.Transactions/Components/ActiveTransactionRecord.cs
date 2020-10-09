@@ -39,7 +39,7 @@ namespace Couchbase.Transactions.Components
 
             var lookupInResult = await atrCollection.LookupInAsync(atrId,
                 specs => specs.Get(TransactionFields.AtrFieldAttempts, isXattr: true),
-                opts => opts.Timeout(config.KeyValueTimeout)).CAF();
+                opts => opts.Timeout(config.KeyValueTimeout).AccessDeleted(true)).CAF();
 
             return FindEntryForTransaction(atrCollection, atrId, lookupInResult.ContentAs<JObject>(0), attemptId,
                 transactionId, lookupInResult.Cas);

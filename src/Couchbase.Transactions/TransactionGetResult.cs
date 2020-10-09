@@ -11,12 +11,6 @@ namespace Couchbase.Transactions
 {
     public class TransactionGetResult
     {
-        ////public static readonly Flags TranscodeFlags = new Flags()
-        ////{
-        ////    DataFormat =  DataFormat.Json,
-        ////    Compression =  Compression.None,
-        ////    TypeCode = TypeCode.
-        ////}
         private readonly byte[] _content;
         private readonly ITypeTranscoder _transcoder;
 
@@ -187,11 +181,11 @@ namespace Couchbase.Transactions
                     op)
                 : null;
 
-            var dm = new DocumentMetadata(
-                casFromDocument,
-                revidFromDocument,
-                exptimeFromDocument
-            );
+            var dm = new DocumentMetadata()
+            {
+                // TODO: When data access is refactored, make sure Crc32c is included here.
+                Cas = casFromDocument, RevId = revidFromDocument, ExpTime = exptimeFromDocument,
+            };
 
             return new TransactionGetResult(
                 id,
