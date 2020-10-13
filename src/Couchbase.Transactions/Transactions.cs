@@ -19,6 +19,7 @@ using Couchbase.Transactions.Internal;
 using Couchbase.Transactions.Internal.Test;
 using Couchbase.Transactions.Log;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Couchbase.Transactions
 {
