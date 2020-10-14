@@ -11,8 +11,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CouchbaseTransactionExample
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase.Transactions.Tests.IntegrationTests", "tests\Couchbase.Transactions.Tests\Couchbase.Transactions.Tests.IntegrationTests\Couchbase.Transactions.Tests.IntegrationTests.csproj", "{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase", "..\couchbase-net-client\src\Couchbase\Couchbase.csproj", "{C36F020B-87FC-452D-B100-EA7F73B93A14}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -35,10 +33,6 @@ Global
 		{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}.Release|Any CPU.Build.0 = Release|Any CPU
-		{C36F020B-87FC-452D-B100-EA7F73B93A14}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{C36F020B-87FC-452D-B100-EA7F73B93A14}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{C36F020B-87FC-452D-B100-EA7F73B93A14}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{C36F020B-87FC-452D-B100-EA7F73B93A14}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
