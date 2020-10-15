@@ -6,22 +6,24 @@ using Couchbase.Core.IO.Operations;
 using Couchbase.Core.IO.Transcoders;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Components;
+using Couchbase.Transactions.DataModel;
+using Couchbase.Transactions.Internal;
 
 namespace Couchbase.Transactions
 {
     public class TransactionGetResult
     {
-        private readonly byte[] _content;
-        private readonly ITypeTranscoder _transcoder;
+        private readonly IContentAsWrapper _content;
+        private readonly ITypeTranscoder _transcoder; // TODO: this should no longer be necessary
 
         public static readonly TransactionGetResult? Empty = null;
 
         private TransactionGetResult(
             [NotNull] string id,
-            [NotNull] byte[] content,
+            [NotNull] IContentAsWrapper content,
             ulong cas,
             [NotNull] ICouchbaseCollection collection,
-            TransactionLinks? links,
+            TransactionXattrs? transactionXattrs,
             TransactionJsonDocumentStatus status,
             DocumentMetadata? documentMetadata,
             ITypeTranscoder transcoder)
@@ -31,39 +33,30 @@ namespace Couchbase.Transactions
             _content = content;
             Cas = cas;
             Collection = collection;
-            Links = links;
+            TransactionXattrs = transactionXattrs;
             Status = status;
             DocumentMetadata = documentMetadata;
             _transcoder = transcoder;
         }
 
-        public TransactionJsonDocumentStatus Status { get; }
-
-        public TransactionLinks? Links { get; }
+        internal TransactionJsonDocumentStatus Status { get; }
+        internal TransactionXattrs? TransactionXattrs { get; }
 
         public string Id { get; }
-        public string FullyQualifiedId { get; }
+        internal string FullyQualifiedId { get; }
         public ulong Cas { get; internal set; }
         public DocumentMetadata? DocumentMetadata { get; }
         public ICouchbaseCollection Collection { get; }
 
-        public T ContentAs<T>() => _transcoder.Decode<T>(_content, GetFlags<T>(), OpCode.Get);
+        public T ContentAs<T>() => _content.ContentAs<T>();
 
-        // TODO: not sure about this.
-        private Flags GetFlags<T>() => default(T) != null ? _transcoder.GetFormat<T>(default(T)!) : new Flags()
-        {
-            Compression = Compression.None,
-            DataFormat = DataFormat.Json,
-            TypeCode = TypeCode.Object
-        };
-
-        public static string GetFullyQualifiedId(ICouchbaseCollection collection, string id) =>
+        internal static string GetFullyQualifiedId(ICouchbaseCollection collection, string id) =>
             $"{collection.Scope.Bucket.Name}::{collection.Scope.Name}::{collection.Name}::{id}";
 
-        public static TransactionGetResult FromInsert(
+        internal static TransactionGetResult FromInsert(
             ICouchbaseCollection collection,
             string id,
-            byte[] content,
+            IContentAsWrapper content,
             string transactionId,
             string attemptId,
             string atrId,
@@ -74,70 +67,60 @@ namespace Couchbase.Transactions
             ITypeTranscoder transcoder
             )
         {
-            var links = new TransactionLinks(
-                Encoding.UTF8.GetString(content),
-                atrId,
-                atrBucketName,
-                atrScopeName,
-                atrCollectionName,
-                transactionId,
-                attemptId,
-                null,
-                null,
-                null,
-                "insert"
-                );
+            var txn = new TransactionXattrs();
+            txn.AtrRef = new AtrRef()
+            {
+                BucketName =  atrBucketName,
+                CollectionName = atrCollectionName,
+                ScopeName = atrScopeName,
+                Id = atrId
+            };
+
+            txn.Id = new CompositeId()
+            {
+                Transactionid = transactionId,
+                AttemptId = attemptId
+            };
 
             return new TransactionGetResult(
                 id,
                 content,
                 updatedDoc.Cas,
                 collection,
-                links,
+                txn,
                 TransactionJsonDocumentStatus.Normal,
                 null,
                 transcoder
             );
         }
 
-        public static TransactionGetResult FromOther(
+        internal static TransactionGetResult FromOther(
             TransactionGetResult doc,
-            byte[] content,
+            IContentAsWrapper content,
             TransactionJsonDocumentStatus status)
         {
-            var links = new TransactionLinks(
-                doc.Links.StagedContent,
-                doc.Links.AtrId,
-                doc.Links.AtrBucketName,
-                doc.Links.AtrScopeName,
-                doc.Links.AtrCollectionName,
-                doc.Links.StagedTransactionId,
-                doc.Links.StagedAttemptId,
-                doc.Links.CasPreTxn,
-                doc.Links.RevIdPreTxn,
-                doc.Links.ExptimePreTxn,
-                doc.Links.Op
-            );
+            // TODO: replacement for Links
 
             return new TransactionGetResult(
                 doc.Id,
                 content,
                 doc.Cas,
                 doc.Collection,
-                links,
+                doc.TransactionXattrs,
                 status,
                 doc.DocumentMetadata,
                 doc._transcoder
                 );
         }
 
-        public static TransactionGetResult FromLookupIn(
+        [Obsolete]
+        internal static TransactionGetResult FromLookupIn(
             ICouchbaseCollection collection,
             string id,
             TransactionJsonDocumentStatus status,
             ITypeTranscoder transcoder,
             ulong lookupInCas,
-            byte[]? preTxnContent,
+            IContentAsWrapper preTxnContent,
             string? atrId = null,
             string? transactionId = null,
             string? attemptId = null,
@@ -166,21 +149,6 @@ namespace Couchbase.Transactions
                 (atrScopeName, atrCollectionName) = (pieces[0], pieces[1]);
             }
 
-            var links = stagedContent != null
-                ? new TransactionLinks(
-                    stagedContent,
-                    atrId,
-                    atrBucketName,
-                    atrScopeName,
-                    atrCollectionName,
-                    transactionId,
-                    attemptId,
-                    casPreTxn,
-                    revidPreTxn,
-                    exptimePreTxn,
-                    op)
-                : null;
-
             var dm = new DocumentMetadata()
             {
                 // TODO: When data access is refactored, make sure Crc32c is included here.
@@ -189,14 +157,55 @@ namespace Couchbase.Transactions
 
             return new TransactionGetResult(
                 id,
-                preTxnContent ?? Array.Empty<byte>(),
+                preTxnContent,
                 lookupInCas,
                 collection,
-                links,
+                null, // FIXME
                 status,
                 dm,
                 transcoder);
         }
 
+        ////public static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection docCollection, DocumentWithTransactionMetadata docWithMeta, ITypeTranscoder transcoder)
+        ////{
+        ////    return new TransactionGetResult(
+        ////        id: docWithMeta.Id,
+        ////        content: docWithMeta.PreTransactionContent ?? Array.Empty<byte>(),
+        ////        cas: docWithMeta.LookupInResult.Cas,
+        ////        collection: docCollection,
+        ////        transactionXattrs: null,
+        ////        status: TransactionJsonDocumentStatus.Normal,
+        ////        documentMetadata: docWithMeta.DocumentMetadata,
+        ////        transcoder: transcoder
+        ////    );
+        ////}
+
+        internal static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection collection, string id, IContentAsWrapper content, ulong cas, DocumentMetadata documentMetadata, ITypeTranscoder transcoder)
+        {
+            return new TransactionGetResult(
+                id: id,
+                content: content,
+                cas: cas,
+                collection: collection,
+                transactionXattrs: null,
+                status: TransactionJsonDocumentStatus.Normal,
+                documentMetadata: documentMetadata,
+                transcoder: transcoder
+            );
+        }
+
+        internal static TransactionGetResult FromStaged(ICouchbaseCollection collection, string id, IContentAsWrapper stagedContent, ulong cas, DocumentMetadata documentMetadata, TransactionJsonDocumentStatus status, TransactionXattrs? txn, ITypeTranscoder transcoder)
+        {
+            return new TransactionGetResult(
+                id,
+                stagedContent,
+                cas,
+                collection,
+                txn,
+                status,
+                documentMetadata,
+                transcoder
+                );
+        }
     }
 }

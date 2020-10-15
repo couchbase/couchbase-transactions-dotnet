@@ -102,5 +102,19 @@ namespace Couchbase.Transactions.Internal.Test
     {
         public Func<AttemptContext, string, Task<int?>> BeforeDocGetImpl { get; set; } = DefaultTestHooks.Instance.BeforeDocGet;
         public Task<int?> BeforeDocGet(AttemptContext self, string id) => BeforeDocGetImpl(self, id);
+
+        public Func<AttemptContext, string, Task<int?>> BeforeDocCommittedImpl { get; set; } =
+            DefaultTestHooks.Instance.BeforeDocCommitted;
+        public Task<int?> BeforeDocCommitted(AttemptContext self, string id) => BeforeDocCommittedImpl(self, id);
+
+        public Func<AttemptContext, Task<int?>> BeforeAtrCommitImpl { get; set; } =
+            DefaultTestHooks.Instance.BeforeAtrCommit;
+        public Task<int?> BeforeAtrCommit(AttemptContext self) => BeforeAtrCommitImpl(self);
+
+        public Func<AttemptContext, string, Task<int?>> AfterStagedReplaceCompleteImpl { get; set; } =
+            DefaultTestHooks.Instance.AfterStagedReplaceComplete;
+
+        public Task<int?> AfterStagedReplaceComplete(AttemptContext self, string id) =>
+            AfterStagedReplaceCompleteImpl(self, id);
     }
 }

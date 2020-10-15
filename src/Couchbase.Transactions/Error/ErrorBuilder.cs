@@ -73,6 +73,12 @@ namespace Couchbase.Transactions.Error
             return this;
         }
 
-        public TransactionOperationFailedException Build() => new TransactionOperationFailedException(_ctx, _causingErrorClass, _rollbackAttempt, _retryTransaction, _cause, _toRaise);
+        public TransactionOperationFailedException Build() =>
+            new TransactionOperationFailedException(_ctx,
+                _causingErrorClass,
+                _rollbackAttempt,
+                _retryTransaction,
+                _cause,
+                _toRaise);
     }
 }

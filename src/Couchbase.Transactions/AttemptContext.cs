@@ -20,10 +20,12 @@ using Couchbase.Transactions.ActiveTransactionRecords;
 using Couchbase.Transactions.Cleanup;
 using Couchbase.Transactions.Components;
 using Couchbase.Transactions.Config;
+using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Error.Attempts;
 using Couchbase.Transactions.Error.External;
 using Couchbase.Transactions.Error.Internal;
+using Couchbase.Transactions.Internal;
 using Couchbase.Transactions.Internal.Test;
 using Couchbase.Transactions.Log;
 using Couchbase.Transactions.Support;
@@ -120,7 +122,7 @@ namespace Couchbase.Transactions
                     case StagedMutationType.Insert:
                     case StagedMutationType.Replace:
                         // LOGGER.info(attemptId, "found own-write of mutated doc %s", RedactableArgument.redactUser(id));
-                        return TransactionGetResult.FromOther(staged.Doc, staged.Content ?? Array.Empty<byte>(), TransactionJsonDocumentStatus.OwnWrite);
+                        return TransactionGetResult.FromOther(staged.Doc, new JObjectContentWrapper(staged.Content), TransactionJsonDocumentStatus.OwnWrite);
                     case StagedMutationType.Remove:
                         // LOGGER.info(attemptId, "found own-write of removed doc %s", RedactableArgument.redactUser(id));
                         return null;
@@ -129,32 +131,16 @@ namespace Couchbase.Transactions
                 }
             }
 
-
             try
             {
                 try
                 {
-                    // Do GetAsync a document with MAV logic section
                     await _testHooks.BeforeDocGet(this, id).CAF();
 
-                    // Do a Sub-Document lookup, getting all transactional metadata, the “$document” virtual xattr,
-                    // and the document’s body. Timeout is set as in Timeouts.
-                    //  TODO: Added for Protocol 2.0: set accessDeleted=true.
-                    // TODO: use DocumentWithTransactionMetadata.LookupAsync
-                    var docWithMeta = await LookupDocWithMetadata(collection, id).CAF();
-                    var doc = docWithMeta.doc;
-                    // check the transactional metadata to see if the doc is already involved in a transaction.
-                    if (doc.Exists(docWithMeta.atrIdIndex))
-                    {
-                        // TODO: Implement "else if success, check the transactional metadata" section
-                        // from https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#GetAsync-a-Document-With-MAV-Logic
-                    }
-
-                    TransactionGetResult getResult = TransactionGetResultFromLookupIn(collection, id, docWithMeta);
+                    var result = await GetWithMavAsync(collection, id);
 
                     await _testHooks.AfterGetComplete(this, id).CAF();
-
-                    return getResult;
+                    return result;
                 }
                 catch (Exception ex)
                 {
@@ -172,6 +158,88 @@ namespace Couchbase.Transactions
             {
                 SaveErrorWrapper(toSave);
                 throw;
+            }
+        }
+
+        private async Task<TransactionGetResult?> GetWithMavAsync(ICouchbaseCollection collection, string id, string? resolveMissingAtrEntry = null)
+        {
+            try
+            {
+                // Do a Sub-Document lookup, getting all transactional metadata, the “$document” virtual xattr,
+                // and the document’s body. Timeout is set as in Timeouts.
+                var docLookupResult = await DocumentLookupResult.LookupDocumentAsync(collection, id,
+                    _config.KeyValueTimeout, fullDocument: true).CAF();
+
+                if (docLookupResult == null)
+                {
+                    return null;
+                }
+
+                var txn = docLookupResult?.TransactionXattrs;
+                if (txn?.Id?.AttemptId == null
+                    || txn?.Id?.Transactionid == null
+                    || txn?.AtrRef?.BucketName == null
+                    || txn?.AtrRef?.CollectionName == null)
+                {
+                    // Not in a transaction, or insufficient transaction metadata
+                    return docLookupResult!.IsDeleted
+                        ? null
+                        : docLookupResult.GetPreTransactionResult(_transcoder);
+                }
+
+                if (resolveMissingAtrEntry == txn.Id?.AttemptId)
+                {
+                    // This is our second attempt getting the document, and it’s in the same state as before
+                    return docLookupResult!.IsDeleted
+                        ? null
+                        : docLookupResult.GetPreTransactionResult(_transcoder);
+                }
+
+                // we need to resolve the state of that transaction. Here is where we do the “Monotonic Atomic View” (MAV) logic
+                try
+                {
+                    // TODO: double-check if atr attemptid == this attempt id, and return post-transaction version
+                    // (should have been covered by staged mutation check)
+
+                    var docAtrCollection = await txn.AtrRef.GetAtrCollection(_atrCollection!).CAF()
+                                           ?? throw new ActiveTransactionRecordNotFoundException();
+
+                    var atrEntry = await ActiveTransactionRecord.FindEntryForTransaction(docAtrCollection, txn.AtrRef.Id!,
+                                       txn.Id!.AttemptId, txn.Id.Transactionid!, _config).CAF()
+                                   ?? throw new ActiveTransactionRecordNotFoundException();
+
+                    resolveMissingAtrEntry = txn.AtrRef.Id;
+                    if (atrEntry.State == AttemptStates.COMMITTED || atrEntry.State == AttemptStates.COMPLETED)
+                    {
+                        if (txn.Operation?.Type == "remove")
+                        {
+                            return null;
+                        }
+
+                        return docLookupResult!.GetPostTransactionResult(_transcoder, TransactionJsonDocumentStatus.InTxnCommitted);
+                    }
+
+                    if (docLookupResult!.IsDeleted || txn.Operation?.Type == "insert")
+                    {
+                        return null;
+                    }
+
+                    return docLookupResult.GetPreTransactionResult(_transcoder);
+                }
+                catch (Exception atrLookupException)
+                {
+                    var atrLookupTriage = _triage.TriageAtrLookupInMavErrors(atrLookupException);
+                    throw _triage.AssertNotNull(atrLookupTriage, atrLookupException);
+                }
+            }
+            catch (ActiveTransactionRecordNotFoundException)
+            {
+                if (resolveMissingAtrEntry == null)
+                {
+                    throw;
+                }
+
+                return await GetWithMavAsync(collection, id, resolveMissingAtrEntry).CAF();
             }
         }
 
@@ -324,11 +392,12 @@ namespace Couchbase.Transactions
                 try
                 {
                     await _testHooks.BeforeStagedReplace(this, doc.Id);
-                    var contentBytes = GetContentBytes(content);
-                    var specs = CreateMutationOps("replace", contentBytes, doc.DocumentMetadata);
+                    var contentWrapper = new JObjectContentWrapper(content);
+                    var specs = CreateMutationOps("replace", content, doc.DocumentMetadata);
 
                     var opts = new MutateInOptions()
                         .Cas(doc.Cas)
+                        .Timeout(_config.KeyValueTimeout)
                         .StoreSemantics(StoreSemantics.Replace)
                         .Durability(_effectiveDurabilityLevel);
 
@@ -346,18 +415,18 @@ namespace Couchbase.Transactions
                     if (stagedOld?.Type == StagedMutationType.Insert)
                     {
                         // If doc is already in stagedMutations as an INSERT or INSERT_SHADOW, then remove that, and add this op as a new INSERT or INSERT_SHADOW(depending on what was replaced).
-                        _stagedMutations.Add(new StagedMutation(doc, contentBytes, StagedMutationType.Insert, updatedDoc));
+                        _stagedMutations.Add(new StagedMutation(doc, content, StagedMutationType.Insert, updatedDoc));
                     }
                     else
                     {
                         // If doc is already in stagedMutations as a REPLACE, then overwrite it.
-                        _stagedMutations.Add(new StagedMutation(doc, contentBytes, StagedMutationType.Replace, updatedDoc));
+                        _stagedMutations.Add(new StagedMutation(doc, content, StagedMutationType.Replace, updatedDoc));
                     }
 
                     return TransactionGetResult.FromInsert(
                         doc.Collection,
                         doc.Id,
-                        contentBytes,
+                        contentWrapper,
                         _overallContext.TransactionId,
                         _attemptId,
                         _atrId!,
@@ -385,7 +454,7 @@ namespace Couchbase.Transactions
             }
         }
 
-        private List<MutateInSpec> CreateMutationOps(string op, byte[] contentBytes, DocumentMetadata? dm = null)
+        private List<MutateInSpec> CreateMutationOps(string op, object content, DocumentMetadata? dm = null)
         {
             var specs = new List<MutateInSpec>
             {
@@ -394,28 +463,40 @@ namespace Couchbase.Transactions
                 MutateInSpec.Upsert(TransactionFields.AttemptId, _attemptId, createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.AtrId, _atrId, createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.AtrScopeName, _atrScopeName, createPath: true, isXattr: true),
-                MutateInSpec.Upsert(TransactionFields.AtrBucketName, _atrBucketName, isXattr: true),
-                MutateInSpec.Upsert(TransactionFields.AtrCollName, _atrLongCollectionName, isXattr: true),
+                MutateInSpec.Upsert(TransactionFields.AtrBucketName, _atrBucketName, createPath: true, isXattr: true),
+                MutateInSpec.Upsert(TransactionFields.AtrCollName, _atrLongCollectionName, createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.Type, op, createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.Crc32, MutationMacro.ValueCRC32c, createPath: true, isXattr: true),
-                MutateInSpec.Upsert(TransactionFields.StagedData, contentBytes, isXattr: true),
             };
+
+            switch (op)
+            {
+                case "remove":
+                    // FIXME:  why does this fail?  (with or without the UPSERT)
+                    ////specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData, string.Empty, createPath: true, isXattr: true));
+                    ////specs.Add(MutateInSpec.Remove(TransactionFields.StagedData, isXattr: true));
+                    break;
+                case "replace":
+                case "insert":
+                    specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData, content, createPath: true, isXattr: true));
+                    break;
+            }
 
             if (dm != null)
             {
                 if (dm.Cas != null)
                 {
-                    specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnCas, dm.Cas, isXattr: true));
+                    specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnCas, dm.Cas, createPath: true, isXattr: true));
                 }
 
                 if (dm.RevId != null)
                 {
-                    specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnRevid, dm.RevId, isXattr: true));
+                    specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnRevid, dm.RevId, createPath: true, isXattr: true));
                 }
 
                 if (dm.ExpTime != null)
                 {
-                    specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnExptime, dm.ExpTime, isXattr: true));
+                    specs.Add(MutateInSpec.Upsert(TransactionFields.PreTxnExptime, dm.ExpTime, createPath: true, isXattr: true));
                 }
             }
 
@@ -452,31 +533,24 @@ namespace Couchbase.Transactions
                         CheckExpiry();
 
                         await _testHooks.BeforeStagedInsert(this, id).CAF();
-
-                        var contentBytes = GetContentBytes(content);
-                        List<MutateInSpec> specs = CreateMutationOps("insert", contentBytes: contentBytes);
-
-                        var mutateResult = await collection.MutateInAsync(id, specs, opts =>
+                        var contentWrapper = new JObjectContentWrapper(content);
+                        List<MutateInSpec> specs = CreateMutationOps("insert", content);
+                        var opts = new MutateInOptions()
+                            .CreateAsDeleted(true)
+                            .Timeout(_config.KeyValueTimeout)
+                            .StoreSemantics(StoreSemantics.Insert)
+                            .Durability(_effectiveDurabilityLevel);
+                        if (cas.HasValue)
                         {
-                            var mutateCas = cas;
-                            if (mutateCas.HasValue)
-                            {
-                                opts.Cas(mutateCas.Value).StoreSemantics(StoreSemantics.Replace);
-                            }
-                            else
-                            {
-                                opts.StoreSemantics(StoreSemantics.Insert);
-                            }
+                            opts.Cas(cas.Value).StoreSemantics(StoreSemantics.Insert);
+                        }
 
-                            opts.Durability(_effectiveDurabilityLevel);
-
-                            opts.CreateAsDeleted(true);
-                        }).CAF();
+                        var mutateResult = await collection.MutateInAsync(id, specs, opts).CAF();
 
                         var getResult = TransactionGetResult.FromInsert(
                             collection,
                             id,
-                            contentBytes,
+                            contentWrapper,
                             _overallContext.TransactionId,
                             _attemptId,
                             _atrId!,
@@ -488,7 +562,7 @@ namespace Couchbase.Transactions
 
                         await _testHooks.AfterStagedInsertComplete(this, id).CAF();
 
-                        var stagedMutation = new StagedMutation(getResult, contentBytes, StagedMutationType.Insert,
+                        var stagedMutation = new StagedMutation(getResult, content, StagedMutationType.Insert,
                             mutateResult);
                         _stagedMutations.Add(stagedMutation);
 
@@ -683,7 +757,7 @@ namespace Couchbase.Transactions
                 {
                     await _testHooks.BeforeStagedRemove(this, doc.Id).CAF();
                     var contentBytes = GetContentBytes(TransactionFields.StagedDataRemoveKeyword);
-                    var specs = CreateMutationOps(op: "remove", contentBytes, doc.DocumentMetadata);
+                    var specs = CreateMutationOps(op: "remove", TransactionFields.StagedDataRemoveKeyword, doc.DocumentMetadata);
 
                     var opts = new MutateInOptions()
                         .Cas(doc.Cas)
@@ -707,7 +781,7 @@ namespace Couchbase.Transactions
                             $"doc {Redactor.UserData(doc.Id)} is being removed after being inserted in the same txn.");
                     }
 
-                    var stagedRemove = new StagedMutation(doc, ActiveTransactionRecord.RemovePlaceholderBytes,
+                    var stagedRemove = new StagedMutation(doc, TransactionFields.StagedDataRemoveKeyword,
                         StagedMutationType.Remove, updatedDoc);
                     _stagedMutations.Add(stagedRemove);
                 }
@@ -859,7 +933,7 @@ namespace Couchbase.Transactions
             await _testHooks.AfterDocRemovedPostRetry(this, sm.Doc.Id).CAF();
         }
 
-        private Task<(ulong cas, byte[] content)> FetchIfNeededBeforeUnstage(StagedMutation sm)
+        private Task<(ulong cas, object content)> FetchIfNeededBeforeUnstage(StagedMutation sm)
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#FetchIfNeededBeforeUnstage
             // TODO: consider implementing ExtMemoryOptUnstaging mode
@@ -867,7 +941,7 @@ namespace Couchbase.Transactions
             return Task.FromResult((sm.Doc.Cas, sm.Content));
         }
 
-        private async Task UnstageInsertOrReplace(StagedMutation sm, ulong cas, byte[] content, bool insertMode = false, bool ambiguityResolutionMode = false)
+        private async Task UnstageInsertOrReplace(StagedMutation sm, ulong cas, object content, bool insertMode = false, bool ambiguityResolutionMode = false)
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Unstaging-Inserts-and-Replaces-Protocol-20-version
             await _testHooks.BeforeDocCommitted(this, sm.Doc.Id).CAF();
@@ -878,7 +952,7 @@ namespace Couchbase.Transactions
                 try
                 {
                     IMutationResult mutateResult;
-                    var finalDoc = _transcoder.Serializer.Deserialize<JObject>(content);
+                    var finalDoc = content;
                     if (insertMode)
                     {
                         // TODO:  InsertAsync or  upsert?
@@ -1421,27 +1495,79 @@ namespace Couchbase.Transactions
         // TODO: move this to a repository class
         internal async Task CheckWriteWriteConflict(TransactionGetResult gr)
         {
-            //This logic checks and handles a document X previously read inside a transaction, A, being involved in another transaction B. It takes a TransactionGetResult gr variable.
-            if (gr.Links?.AtrBucketName == null)
-            {
-                // If gr has no transaction Metadata, it’s fine to proceed.
-                return;
-            }
-
-            if (gr.Links.StagedTransactionId == _overallContext.TransactionId)
-            {
-                // Else, if transaction A == transaction B, it’s fine to proceed
-                return;
-            }
-
-            // If the transaction has expired, enter ExpiryOvertimeMode and raise Error(ec=FAIL_EXPIRY, raise=TRANSACTION_EXPIRED).
-            CheckExpiry();
-
-            await _testHooks.BeforeCheckAtrEntryForBlockingDoc(this, gr.Id).CAF();
-
-            // Do a lookupIn call to fetch the ATR entry for B.
-            // TODO:  Finish implementing
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#CheckWriteWriteConflict
+            //This logic checks and handles a document X previously read inside a transaction, A, being involved in another transaction B. It takes a TransactionGetResult gr variable.
+
+            var sw = Stopwatch.StartNew();
+            await RepeatUntilSuccessOrThrow(async () =>
+            {
+                try
+                {
+                    var getOtherAtrTask = gr.TransactionXattrs?.AtrRef?.GetAtrCollection(gr.Collection);
+                    if (getOtherAtrTask == null)
+                    {
+                        // If gr has no transaction Metadata, it’s fine to proceed.
+                        return RepeatAction.NoRepeat;
+                    }
+
+                    if (gr.TransactionXattrs?.Id?.Transactionid == _overallContext.TransactionId)
+                    {
+                        // Else, if transaction A == transaction B, it’s fine to proceed
+                        return RepeatAction.NoRepeat;
+                    }
+
+                    // If the transaction has expired, enter ExpiryOvertimeMode and raise Error(ec=FAIL_EXPIRY, raise=TRANSACTION_EXPIRED).
+                    CheckExpiry();
+
+                    await _testHooks.BeforeCheckAtrEntryForBlockingDoc(this, _atrId!).CAF();
+
+                    // Do a lookupIn call to fetch the ATR entry for B.
+                    var otherAtrCollection = await getOtherAtrTask!.CAF();
+                    if (otherAtrCollection == null)
+                    {
+                        // we couldn't get the ATR collection, which means that the entry was bad
+                        // --OR-- the bucket/collection/scope was deleted/locked/rebalanced
+                        // TODO: the spec gives no method of handling this.
+                        throw CreateError(this, ErrorClass.FailHard)
+                            .Cause(new Exception(
+                                $"ATR entry '{Redactor.SystemData(gr?.TransactionXattrs?.AtrRef?.ToString())}' could not be read.",
+                                new DocumentNotFoundException()))
+                            .Build();
+                    }
+
+                    var txn = gr.TransactionXattrs ?? throw new ArgumentNullException(nameof(gr.TransactionXattrs));
+                    txn.ValidateMinimum();
+                    var otherAtr
+                        = await ActiveTransactionRecord.FindEntryForTransaction(otherAtrCollection,
+                            txn.AtrRef!.Id!, txn.Id!.AttemptId!,
+                            txn.Id.Transactionid!, _config).CAF();
+
+                    if (otherAtr == null)
+                    {
+                        // cleanup occurred, OK to proceed.
+                        return RepeatAction.NoRepeat;
+                    }
+
+                    if (otherAtr.State == AttemptStates.COMPLETED || otherAtr.State == AttemptStates.ROLLED_BACK)
+                    {
+                        // ok to proceed
+                        return RepeatAction.NoRepeat;
+                    }
+                }
+                catch (Exception err)
+                {
+                    if (sw.Elapsed > TimeSpan.FromSeconds(1))
+                    {
+                        throw CreateError(this, ErrorClass.FailWriteWriteConflict, err)
+                            .RetryTransaction()
+                            .Build();
+                    }
+
+                    throw;
+                }
+
+                return RepeatAction.RepeatWithBackoff;
+            }).CAF();
         }
 
         internal void SaveErrorWrapper(TransactionOperationFailedException ex)
@@ -1524,11 +1650,11 @@ namespace Couchbase.Transactions
         private class StagedMutation
         {
             public TransactionGetResult Doc { get; }
-            public byte[] Content { get; }
+            public object Content { get; }
             public StagedMutationType Type { get; }
             public IMutationResult MutationResult { get; }
 
-            public StagedMutation(TransactionGetResult doc, byte[] content, StagedMutationType type, IMutationResult mutationResult)
+            public StagedMutation(TransactionGetResult doc, object content, StagedMutationType type, IMutationResult mutationResult)
             {
                 Doc = doc;
                 Content = content;

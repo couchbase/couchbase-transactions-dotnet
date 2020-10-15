@@ -18,7 +18,7 @@ namespace Couchbase.Transactions.Error.Attempts
         public static DocumentAlreadyInTransactionException Create(AttemptContext ctx, TransactionGetResult doc)
         {
             var msg =
-                $"Document {ctx.Redactor.UserData(doc.Id)} is already in a transaction, atr={doc.Links?.AtrIdFull}, attemptId = {doc.Links?.StagedAttemptId ?? "-"}";
+                $"Document {ctx.Redactor.UserData(doc.Id)} is already in a transaction, atr={doc.TransactionXattrs?.AtrRef?.ToString()}, attemptId = {doc.TransactionXattrs?.Id?.AttemptId ?? "-"}";
 
             return new DocumentAlreadyInTransactionException(ctx, doc, msg);
         }

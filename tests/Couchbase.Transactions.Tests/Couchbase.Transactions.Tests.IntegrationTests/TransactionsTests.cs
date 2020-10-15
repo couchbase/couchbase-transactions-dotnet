@@ -8,6 +8,7 @@ using Couchbase.Core.Exceptions.KeyValue;
 using Couchbase.Core.Retry;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Config;
+using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Error.External;
 using Couchbase.Transactions.Error.Internal;
@@ -23,6 +24,9 @@ using RemoveOptions = Couchbase.KeyValue.RemoveOptions;
 
 namespace Couchbase.Transactions.Tests.IntegrationTests
 {
+    /// <summary>
+    /// Tests written independently of the java or fit performer test suites.
+    /// </summary>
     public class TransactionsTests : IClassFixture<ClusterFixture>
     {
         private readonly ClusterFixture _fixture;
@@ -43,7 +47,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var docId = nameof(Basic_Insert_Should_Succeed) + Guid.NewGuid().ToString();
             try
             {
-                var durability = await InsertAndDetermineDurability(defaultCollection, docId + "_testDurability", sampleDoc);
+                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId + "_testDurability", sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -52,6 +56,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 var result = await txn.RunAsync(async ctx =>
                 {
                     var insertResult = await ctx.InsertAsync(defaultCollection, docId, sampleDoc).ConfigureAwait(false);
+                    var getResult = await ctx.GetAsync(defaultCollection, docId);
+                    Assert.NotNull(getResult);
+                    var asJobj = getResult!.ContentAs<JObject>();
+                    Assert.Equal("bar", asJobj["foo"].Value<string>());
                 });
 
                 _outputHelper.WriteLine(string.Join(",", result.Attempts));
@@ -90,7 +98,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = await InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -143,7 +151,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = await InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -191,7 +199,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = await InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -238,7 +246,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = await InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -275,25 +283,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     throw;
                 }
             }
-        }
-
-        private static async Task<DurabilityLevel> InsertAndDetermineDurability(ICouchbaseCollection defaultCollection, string docId,
-            object sampleDoc)
-        {
-            var durability = DurabilityLevel.Majority;
-
-            try
-            {
-                _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability).Expiry(TimeSpan.FromMinutes(10)));
-            }
-            catch (DurabilityImpossibleException)
-            {
-                // when running on single-node cluster, such as localhost.
-                durability = DurabilityLevel.None;
-                _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability).Expiry(TimeSpan.FromMinutes(10)));
-            }
-
-            return durability;
         }
 
         [Fact]
@@ -405,44 +394,97 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         }
 
         [Fact]
-        public async Task Get_Should_Succeed_After_Two_Failures()
+        public async Task DocumentLookup_Should_Include_Metadata()
         {
             var defaultCollection = await _fixture.GetDefaultCollection();
+            var sampleDoc = new { type = nameof(DocumentLookup_Should_Include_Metadata), foo = "bar", revision = 100 };
             var docId = Guid.NewGuid().ToString();
-            var sampleDoc = new { type = nameof(Get_Should_Succeed_After_Two_Failures), foo = "bar", revision = 100 };
-            var durability = await InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
-
-            var txn = Transactions.Create(_fixture.Cluster);
-            var configBuilder = TransactionConfigBuilder.Create();
-            configBuilder.DurabilityLevel(durability);
-            int attempts = 0;
-            txn.TestHooks = new DelegateTestHooks()
+            try
             {
-                BeforeDocGetImpl = (ctx, id) =>
+                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+
+                var configBuilder = TransactionConfigBuilder.Create();
+                configBuilder.DurabilityLevel(durability);
+                if (Debugger.IsAttached)
                 {
-                    if (attempts++ < 2)
-                    {
-                        _outputHelper.WriteLine(nameof(ITestHooks.BeforeDocGet) + " fail " + attempts);
-                        throw new InternalIntegrationTestException() { CausingErrorClass = ErrorClass.FailTransient };
-                    }
-
-                    _outputHelper.WriteLine(nameof(ITestHooks.BeforeDocGet) + " pass after " + attempts);
-                    return Task.FromResult<int?>(2);
+                    configBuilder.ExpirationTime(TimeSpan.FromMinutes(10));
                 }
-            };
 
-            bool getSucceeded = false;
-            var result = await txn.RunAsync(async ctx =>
+                var txn = Transactions.Create(_fixture.Cluster, configBuilder);
+
+
+                txn.TestHooks = new DelegateTestHooks()
+                {
+                    BeforeDocCommittedImpl = async (ctx, id) =>
+                    {
+                        var documentLookupResult =
+                            await DocumentLookupResult.LookupDocumentAsync(defaultCollection, id, null, true);
+
+                        ////Assert.NotNull(documentLookupResult.DocumentAs<JObject>());
+                        ////Assert.NotNull(documentLookupResult?.TransactionXattrs);
+                        ////_outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
+
+                        return 0;
+                    },
+
+                    AfterStagedReplaceCompleteImpl = async (ctx, id) =>
+                    {
+                        var documentLookupResult =
+                            await DocumentLookupResult.LookupDocumentAsync(defaultCollection, id, null, true);
+
+                        ////Assert.NotNull(documentLookupResult.DocumentAs<JObject>());
+                        ////Assert.NotNull(documentLookupResult?.TransactionXattrs);
+                        ////_outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
+
+                        return 0;
+                    }
+                };
+
+                var result = await txn.RunAsync(async ctx =>
+                {
+                    var getResult = await ctx.GetAsync(defaultCollection, docId);
+                    var docGet = getResult!.ContentAs<dynamic>();
+
+                    docGet.revision = docGet.revision + 1;
+                    var replaceResult = await ctx.ReplaceAsync(getResult, docGet);
+
+                    var documentLookupResult =
+                        await DocumentLookupResult.LookupDocumentAsync(defaultCollection, docId, null, true);
+
+                    Assert.NotNull(documentLookupResult?.TransactionXattrs);
+                    Assert.NotNull(documentLookupResult.StagedContent?.ContentAs<object>());
+                    _outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
+                });
+
+                Assert.NotEmpty(result.Attempts);
+                _outputHelper.WriteLine(string.Join(",", result.Attempts));
+                ////await txn.DisposeAsync();
+            }
+            finally
             {
-                var getResult = await ctx.GetAsync(defaultCollection, docId);
-                var docGet = getResult?.ContentAs<dynamic>();
-                getSucceeded = true;
-            });
+                _fixture.DumpLogs(_outputHelper);
+            }
+        }
 
-            Assert.NotNull(result);
-            Assert.True(getSucceeded);
-            Assert.NotEqual(0, attempts);
-            Assert.NotInRange(result.Attempts.Count(), 0, 2);
+        [Fact]
+        public async Task DocumentLookup_Basic()
+        {
+            var defaultCollection = await _fixture.GetDefaultCollection();
+            var sampleDoc = new { type = nameof(DocumentLookup_Basic), foo = "bar", revision = 100, sub = new { a = 1, b = 2 } };
+            var docId = Guid.NewGuid().ToString();
+            var insertResult =
+                await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(DurabilityLevel.None));
+            var mutateResult =
+                await defaultCollection.MutateInAsync(docId, specs =>
+                        specs.Upsert("txn.id.txn", "tid1", createPath: true, isXattr: true)
+                            .Upsert("txn.id.atmpt", "atmptid1", createPath: true, isXattr: true),
+                    opts => opts.CreateAsDeleted(true)
+                        .Cas(insertResult.Cas)
+                        .Durability(DurabilityLevel.None)
+                        .StoreSemantics(StoreSemantics.Replace));
+
+            var docLookup = await DocumentLookupResult.LookupDocumentAsync(defaultCollection, docId, null, true);
+            Assert.NotNull(docLookup.TransactionXattrs);
         }
     }
 }

@@ -16,6 +16,8 @@ namespace Couchbase.Transactions
         public DateTimeOffset AbsoluteExpiration => StartTime + Config.ExpirationTime;
         public bool IsExpired => AbsoluteExpiration <= DateTimeOffset.UtcNow;
 
+        public TimeSpan RemainingUntilExpiration => AbsoluteExpiration - DateTimeOffset.UtcNow;
+
         public TransactionContext(
             [NotNull] string transactionId,
             DateTimeOffset startTime,

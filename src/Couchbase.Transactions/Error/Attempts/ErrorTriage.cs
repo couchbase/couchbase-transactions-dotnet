@@ -359,5 +359,20 @@ namespace Couchbase.Transactions.Error.Attempts
 
             return (ec, toThrow?.Build());
         }
+
+        internal (ErrorClass ec, TransactionOperationFailedException? toThrow) TriageAtrLookupInMavErrors(Exception err)
+        {
+            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Get-a-Document-With-MAV-Logic
+            // after "Do a Sub-Document lookup of the transaction's ATR entry"
+            var ec = err.Classify();
+            ErrorBuilder? toThrow = ec switch
+            {
+                FailPathNotFound => throw new ActiveTransactionRecordEntryNotFoundException(),
+                FailDocNotFound => Error(ec, new ActiveTransactionRecordNotFoundException()),
+                _ => Error(ec, err)
+            };
+
+            return (ec, toThrow?.Build());
+        }
     }
 }

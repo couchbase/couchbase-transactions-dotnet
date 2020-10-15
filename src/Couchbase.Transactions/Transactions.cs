@@ -127,6 +127,7 @@ namespace Couchbase.Transactions
                         await Task.Delay(delayMs).CAF();
                         opRetryBackoffMillisecond = Math.Min(opRetryBackoffMillisecond * 10, 100);
                         //    Go back to the start of this loop, e.g.a new attempt.
+                        continue;
                     }
                     else
                     {

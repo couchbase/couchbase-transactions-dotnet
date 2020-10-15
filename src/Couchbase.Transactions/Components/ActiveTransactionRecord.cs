@@ -15,9 +15,6 @@ namespace Couchbase.Transactions.Components
 {
     internal class ActiveTransactionRecord
     {
-        public const string Remove = "<<REMOVE>>";
-        public static readonly byte[] RemovePlaceholderBytes = Encoding.UTF8.GetBytes(Remove);
-
         [JsonProperty("attempts")]
         public Dictionary<string, AtrEntry> Attempts { get; set; } = new Dictionary<string, AtrEntry>();
 
@@ -26,9 +23,7 @@ namespace Couchbase.Transactions.Components
             string atrId,
             string attemptId,
             string transactionId,
-            TimeSpan timeout,
-            TransactionConfig config,
-            IInternalSpan? span = null
+            TransactionConfig config
             )
         {
             _ = atrCollection ?? throw new ArgumentNullException(nameof(atrCollection));
@@ -40,6 +35,11 @@ namespace Couchbase.Transactions.Components
             var lookupInResult = await atrCollection.LookupInAsync(atrId,
                 specs => specs.Get(TransactionFields.AtrFieldAttempts, isXattr: true),
                 opts => opts.Timeout(config.KeyValueTimeout).AccessDeleted(true)).CAF();
+
+            if (!lookupInResult.Exists(0))
+            {
+                return null;
+            }
 
             return FindEntryForTransaction(atrCollection, atrId, lookupInResult.ContentAs<JObject>(0), attemptId,
                 transactionId, lookupInResult.Cas);

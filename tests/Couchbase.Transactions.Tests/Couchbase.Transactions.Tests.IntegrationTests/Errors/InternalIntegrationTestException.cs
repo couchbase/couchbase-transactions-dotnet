@@ -13,4 +13,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Errors
     {
         public ErrorClass CausingErrorClass { get; set; } = ErrorClass.FailOther;
     }
+
+    public static class ErrorClassExtensions
+    {
+        public static Exception Throwable(this ErrorClass ec) =>
+            new InternalIntegrationTestException() {CausingErrorClass = ec};
+    }
 }

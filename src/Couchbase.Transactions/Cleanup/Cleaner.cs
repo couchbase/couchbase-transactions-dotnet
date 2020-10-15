@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Couchbase.Core.IO.Transcoders;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Components;
+using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Internal.Test;
 using Couchbase.Transactions.Support;
@@ -85,19 +86,19 @@ namespace Couchbase.Transactions.Cleanup
                     {
                         await TestHooks.BeforeRemoveDoc(dr.Id).CAF();
                         var collection = await dr.GetCollection(_cluster).CAF();
-                        var finalDoc = _transcoder.Serializer.Deserialize<JObject>(op.StagedData);
+                        var finalDoc = op.StagedContent!.ContentAs<object>();
                         if (op.IsDeleted)
                         {
                             await collection.MutateInAsync(dr.Id, specs =>
                                     specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
                                         .SetDoc(finalDoc),
-                                opts => opts.Cas(op.LookupInResult.Cas)
+                                opts => opts.Cas(op.Cas)
                                     .CreateAsDeleted(true)
                                     .Timeout(_keyValueTimeout));
                         }
                         else
                         {
-                            await collection.RemoveAsync(dr.Id, opts => opts.Cas(op.LookupInResult.Cas)
+                            await collection.RemoveAsync(dr.Id, opts => opts.Cas(op.Cas)
                                 .Timeout(_keyValueTimeout)).CAF();
                         }
                     }).CAF();
@@ -111,10 +112,10 @@ namespace Couchbase.Transactions.Cleanup
                     {
                         await TestHooks.BeforeRemoveLinks(dr.Id).CAF();
                         var collection = await dr.GetCollection(_cluster).CAF();
-                        var finalDoc = _transcoder.Serializer.Deserialize<JObject>(op.StagedData);
+                        var finalDoc = op.StagedContent!.ContentAs<object>();
                         await collection.MutateInAsync(dr.Id, specs =>
                                 specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true),
-                            opts => opts.Cas(op.LookupInResult.Cas)
+                            opts => opts.Cas(op.Cas)
                                 .CreateAsDeleted(true)
                                 .Timeout(_keyValueTimeout));
                     }).CAF();
@@ -132,7 +133,7 @@ namespace Couchbase.Transactions.Cleanup
                         // TODO: This has significant overlap with UnstageInsertOrReplace.
                         await TestHooks.BeforeCommitDoc(dr.Id).CAF();
                         var collection = await dr.GetCollection(_cluster).CAF();
-                        var finalDoc = _transcoder.Serializer.Deserialize<JObject>(op.StagedData);
+                        var finalDoc = op.StagedContent!.ContentAs<object>();
                         if (op.IsDeleted)
                         {
                             await collection.InsertAsync(dr.Id, finalDoc).CAF();
@@ -143,7 +144,7 @@ namespace Couchbase.Transactions.Cleanup
                             await collection.MutateInAsync(dr.Id, specs =>
                                     specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
                                         .SetDoc(finalDoc)
-                                , opts => opts.Cas(op.LookupInResult.Cas)
+                                , opts => opts.Cas(op.Cas)
                                     .CreateAsDeleted(true)
                                     .Timeout(_keyValueTimeout)).CAF();
                         }
@@ -157,39 +158,34 @@ namespace Couchbase.Transactions.Cleanup
                     {
                         await TestHooks.BeforeRemoveDocStagedForRemoval(dr.Id).CAF();
                         var collection = await dr.GetCollection(_cluster).CAF();
-                        await collection.RemoveAsync(dr.Id, opts => opts.Cas(op.LookupInResult.Cas)
+                        await collection.RemoveAsync(dr.Id, opts => opts.Cas(op.Cas)
                             .Timeout(_keyValueTimeout)).CAF();
                     }).CAF();
             }
         }
 
-        public async Task CleanupDoc(DocRecord dr, bool requireCrc32ToMatchStaging, Func<DocumentWithTransactionMetadata, Task> perDoc, string attemptId)
+        public async Task CleanupDoc(DocRecord dr, bool requireCrc32ToMatchStaging, Func<DocumentLookupResult, Task> perDoc, string attemptId)
         {
             try
             {
                 await TestHooks.BeforeDocGet(dr.Id).CAF();
                 var collection = await dr.GetCollection(_cluster).CAF();
-                var op =
-                    await DocumentWithTransactionMetadata.LookupAsync(collection, dr.Id, _keyValueTimeout,
-                        fetchDocBody: false).CAF();
+                var docLookupResult = await DocumentLookupResult
+                    .LookupDocumentAsync(collection, dr.Id, _keyValueTimeout, fullDocument: false).CAF();
 
-                if (op?.TransactionId == null)
+                if (docLookupResult.TransactionXattrs == null)
                 {
-                    // doc does not exist, or txn field already cleaned up.
-                    // treat as success.
                     return;
                 }
 
-                if (op.AttemptId != attemptId)
+                if (docLookupResult.TransactionXattrs.Id?.AttemptId != attemptId)
                 {
-                    // The document is involved in another transaction.
-                    // It was probably committed and then another transaction started on it. This is fine, continue as success.
                     return;
                 }
 
-                if (requireCrc32ToMatchStaging && !string.IsNullOrEmpty(op.DocumentMetadata?.Crc32c))
+                if (requireCrc32ToMatchStaging && !string.IsNullOrEmpty(docLookupResult.DocumentMetadata?.Crc32c))
                 {
-                    if (op.DocumentMetadata.Crc32c != op.Crc32)
+                    if (docLookupResult.DocumentMetadata?.Crc32c != docLookupResult.TransactionXattrs.Operation?.Crc32)
                     {
                         // "the world has moved on", continue as success
                         return;
@@ -197,7 +193,7 @@ namespace Couchbase.Transactions.Cleanup
                 }
 
                 // If we reach here, the document is unchanged from staging, and it's safe to proceed
-                await perDoc(op).ConfigureAwait(false);
+                await perDoc(docLookupResult).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
