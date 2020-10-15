@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using Couchbase.Core.IO.Operations;
 using Couchbase.KeyValue;
+using Microsoft.Extensions.Logging;
 
 namespace Couchbase.Transactions.Config
 {
@@ -53,5 +54,11 @@ namespace Couchbase.Transactions.Config
         }
 
         public TransactionConfig Build() => _config;
+
+        public TransactionConfigBuilder LoggerFactory(ILoggerFactory loggerFactory)
+        {
+            _config.LoggerFactory = loggerFactory;
+            return this;
+        }
     }
 }

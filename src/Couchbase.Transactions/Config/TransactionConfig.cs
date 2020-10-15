@@ -6,6 +6,7 @@ using Couchbase.KeyValue;
 using Couchbase.Query;
 using Couchbase.Transactions.Cleanup;
 using Couchbase.Transactions.Support;
+using Microsoft.Extensions.Logging;
 
 namespace Couchbase.Transactions.Config
 {
@@ -28,6 +29,7 @@ namespace Couchbase.Transactions.Config
         public Severity? LogOnFailureLevel { get; internal set; }
         public TimeSpan? KeyValueTimeout { get; internal set; }
         public DurabilityLevel DurabilityLevel { get; internal set; }
+        public ILoggerFactory? LoggerFactory { get; internal set; }
 
         internal TransactionConfig(
             DurabilityLevel durabilityLevel = DefaultDurabilityLevel,
