@@ -5,19 +5,21 @@
     <Nullable>enable</Nullable>
     <UserSecretsId>58fdeb9c-f0a3-449b-84bc-d7c614ab7ec8</UserSecretsId>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
-    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageLicenseExpression></PackageLicenseExpression>
     <Copyright>Couchbase, Inc. 2020</Copyright>
     <PackageIcon>couchbase-icon.png</PackageIcon>
     <PackageIconUrl />
     <Company>Couchbase, Inc</Company>
     <Authors>Couchbase, Inc</Authors>
     <Description>This package provides functionality for Couchbase Distributed ACID Transactions for .NET Core. Distributed ACID Transactions are operations that ensure that when multiple documents need to be modified such that only the successful modification of all justifies the modification of any, either all the modifications do occur successfully; or none of them occurs. This Atomicity supports insert, update, and delete operations, across any number of documents.</Description>
-    <Version>1.0.0-alpha.1</Version>
+    <Version>1.0.0-alpha.2</Version>
     <RepositoryUrl>https://github.com/couchbase/couchbase-transactions-dotnet</RepositoryUrl>
     <RepositoryType>GitHub</RepositoryType>
     <PackageTags>couchbase, transactions, distributed</PackageTags>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>
     <FileVersion>0.1.0.0</FileVersion>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <PackageLicenseFile>LICENSE.md</PackageLicenseFile>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -29,6 +31,10 @@
     <Compile Remove="old\**" />
     <EmbeddedResource Remove="old\**" />
     <None Remove="old\**" />
+    <None Include="..\..\LICENSE.md">
+      <Pack>True</Pack>
+      <PackagePath></PackagePath>
+    </None>
     <None Include="couchbase-icon.png">
       <Pack>True</Pack>
       <PackagePath></PackagePath>
