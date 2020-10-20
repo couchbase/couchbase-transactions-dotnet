@@ -21,20 +21,38 @@ namespace Couchbase.Transactions.Cleanup
 
         private readonly ICluster _cluster;
         private readonly TimeSpan? _keyValueTimeout;
-        private readonly ITypeTranscoder _transcoder;
-        public Cleaner(ICluster cluster, TimeSpan? keyValueTimeout, ITypeTranscoder transcoder)
+        public Cleaner(ICluster cluster, TimeSpan? keyValueTimeout)
         {
             _cluster = cluster;
             _keyValueTimeout = keyValueTimeout;
-            _transcoder = transcoder;
         }
 
-
-        public async Task ProcessCleanupRequest(CleanupRequest cleanupRequest)
+        public async Task<TransactionCleanupAttempt> ProcessCleanupRequest(CleanupRequest cleanupRequest, bool isRegular = true)
         {
-            // TODO: ForwardCompatibilityCheck()
-            await CleanupDocs(cleanupRequest).CAF();
-            await CleanupAtrEntry(cleanupRequest).CAF();
+            if (string.IsNullOrEmpty(cleanupRequest.AtrId))
+            {
+                throw new ArgumentNullException(nameof(cleanupRequest.AtrId));
+            }
+
+            try
+            {
+                // TODO: ForwardCompatibilityCheck()
+                await CleanupDocs(cleanupRequest).CAF();
+                await CleanupAtrEntry(cleanupRequest).CAF();
+                return new TransactionCleanupAttempt(
+                    success: true,
+                    isRegular: isRegular,
+                    request: cleanupRequest);
+            }
+            catch (Exception ex)
+            {
+                // TODO: publish stream of failed cleanups and their cause.
+                return new TransactionCleanupAttempt(
+                    success: false,
+                    isRegular: isRegular,
+                    request: cleanupRequest,
+                    failureReason: ex);
+            }
         }
 
         private Task CleanupDocs(CleanupRequest cleanupRequest) => cleanupRequest.State switch

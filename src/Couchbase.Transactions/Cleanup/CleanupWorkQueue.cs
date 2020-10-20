@@ -28,9 +28,9 @@ namespace Couchbase.Transactions.Cleanup
         public ICleanupTestHooks TestHooks { get; set; } = DefaultCleanupTestHooks.Instance;
 
 
-        public CleanupWorkQueue(ICluster cluster, TimeSpan? keyValueTimeout, ITypeTranscoder transcoder)
+        public CleanupWorkQueue(ICluster cluster, TimeSpan? keyValueTimeout)
         {
-            _cleaner = new Cleaner(cluster, keyValueTimeout, transcoder);
+            _cleaner = new Cleaner(cluster, keyValueTimeout);
             _consumer = Task.Run(ConsumeWork);
         }
 
@@ -56,7 +56,11 @@ namespace Couchbase.Transactions.Cleanup
 
                 try
                 {
-                    await _cleaner.ProcessCleanupRequest(cleanupRequest).ConfigureAwait(false);
+                    var cleanupResult = await _cleaner.ProcessCleanupRequest(cleanupRequest).ConfigureAwait(false);
+                    if (!cleanupResult.Success && cleanupResult.FailureReason != null)
+                    {
+                        throw new CleanupFailedException(cleanupResult.FailureReason);
+                    }
                 }
                 catch (Exception ex)
                 {

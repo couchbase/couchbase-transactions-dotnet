@@ -76,7 +76,7 @@ namespace Couchbase.Transactions
             loggerFactory = _cluster.ClusterServices?.GetService(typeof(ILoggerFactory)) as ILoggerFactory ??
                             NullLoggerFactory.Instance;
            ////_cleanupWorkQueue = new CleanupWorkQueue(_cluster, Config.KeyValueTimeout, _typeTranscoder);
-           _cleaner = new Cleaner(cluster, Config.KeyValueTimeout, _typeTranscoder);
+           _cleaner = new Cleaner(cluster, Config.KeyValueTimeout);
 
             // TODO: whatever the equivalent of 'cluster.environment().eventBus().publish(new TransactionsStarted(config));' is.
         }
