@@ -70,6 +70,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 var postTxnGetResult = await defaultCollection.GetAsync(docId);
                 var postTxnDoc = postTxnGetResult.ContentAs<dynamic>();
                 Assert.Equal("100", postTxnDoc.revision.ToString());
+
+                var postTxnLookupInResult =
+                    await defaultCollection.LookupInAsync(docId, spec => spec.Get("txn", isXattr: true));
+                Assert.False(postTxnLookupInResult.Exists(0));
             }
             finally
             {
@@ -141,6 +145,62 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 }
             }
         }
+
+        [Fact]
+        public async Task Two_Replaces_Same_Document()
+        {
+            var defaultCollection = await _fixture.GetDefaultCollection();
+            var sampleDoc = new { type = nameof(Basic_Replace_Should_Succeed), foo = "bar", revision = 100 };
+            var docId = Guid.NewGuid().ToString();
+            try
+            {
+                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
+
+                var result = await txn.RunAsync(async ctx =>
+                {
+                    var getResult = await ctx.GetAsync(defaultCollection, docId);
+                    Assert.NotNull(getResult);
+                    var docGet = getResult!.ContentAs<dynamic>();
+
+                    docGet.revision = docGet.revision + 1;
+                    var replaceResult = await ctx.ReplaceAsync(getResult, docGet);
+
+                    var replacedDoc = replaceResult.ContentAs<dynamic>();
+                    replacedDoc.foo = "replaced_foo";
+                    var secondReplaceResult = await ctx.ReplaceAsync(replaceResult, replacedDoc);
+                });
+
+                Assert.NotEmpty(result.Attempts);
+                _outputHelper.WriteLine(string.Join(",", result.Attempts));
+                Assert.Contains(result.Attempts, ta => ta.FinalState == AttemptStates.COMMITTED
+                || ta.FinalState == AttemptStates.COMPLETED);
+
+                var postTxnGetResult = await defaultCollection.GetAsync(docId);
+                var postTxnDoc = postTxnGetResult.ContentAs<JObject>();
+                Assert.Equal(101, postTxnDoc["revision"].Value<int>());
+                Assert.Equal("replaced_foo", postTxnDoc["foo"].Value<string>());
+
+                await txn.DisposeAsync();
+            }
+            finally
+            {
+                try
+                {
+                    await defaultCollection.RemoveAsync(docId);
+                }
+                catch (Exception e)
+                {
+                    _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
+                    throw;
+                }
+                finally
+                {
+                    _fixture.DumpLogs(_outputHelper);
+                }
+            }
+        }
+
 
         [Fact]
         public async Task Basic_Remove_Should_Succeed()
@@ -236,6 +296,35 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     throw;
                 }
             }
+        }
+
+        [Fact]
+        public async Task Rollback_Insert_Should_Result_In_No_Document()
+        {
+            var defaultCollection = await _fixture.GetDefaultCollection();
+            var sampleDoc = new { type = nameof(Rollback_Insert_Should_Result_In_No_Document), foo = "bar", revision = 100 };
+            var docId = Guid.NewGuid().ToString();
+            var durability = DurabilityLevel.None;
+
+            var txn = Transactions.Create(_fixture.Cluster);
+            var configBuilder = TransactionConfigBuilder.Create();
+            configBuilder.DurabilityLevel(durability);
+
+            var runTask = txn.RunAsync(async ctx =>
+            {
+                var insertResult = await ctx.InsertAsync(defaultCollection, docId, sampleDoc);
+                throw ErrorClass.FailHard.Throwable();
+            });
+
+            var transactionFailedException = await Assert.ThrowsAsync<TransactionFailedException>(() => runTask);
+            var result = transactionFailedException.Result;
+            Assert.NotEmpty(result.Attempts);
+            _outputHelper.WriteLine(string.Join(",", result.Attempts));
+            Assert.Contains(result.Attempts,
+                ta => ta.FinalState == AttemptStates.ROLLED_BACK);
+
+            var postTxnGetTask = defaultCollection.GetAsync(docId);
+            _ = await Assert.ThrowsAsync<DocumentNotFoundException>(() => postTxnGetTask);
         }
 
         [Fact]
@@ -392,6 +481,27 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             Assert.NotEmpty(transactionFailedException.Result.Attempts);
             Assert.NotInRange(transactionFailedException.Result.Attempts.Count(), 0, 2);
         }
+
+        [Fact]
+        public async Task Get_NotFound_Throws_DocumentNotFound()
+        {
+            var defaultCollection = await _fixture.GetDefaultCollection();
+            var docId = Guid.NewGuid().ToString();
+
+            var txn = Transactions.Create(_fixture.Cluster);
+
+            var runTask = txn.RunAsync(async ctx =>
+            {
+                var getResult = await ctx.GetAsync(defaultCollection, docId);
+                var docGet = getResult?.ContentAs<dynamic>();
+                Assert.False(true, "Should never have reached here.");
+            });
+
+            var transactionFailedException = await Assert.ThrowsAsync<TransactionFailedException>(() => runTask);
+            Assert.NotNull(transactionFailedException.Result);
+            Assert.NotEmpty(transactionFailedException.Result.Attempts);
+        }
+
 
         [Fact]
         public async Task DocumentLookup_Should_Include_Metadata()

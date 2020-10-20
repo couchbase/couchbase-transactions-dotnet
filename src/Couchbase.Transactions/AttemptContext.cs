@@ -88,21 +88,18 @@ namespace Couchbase.Transactions
 
         public ILogger<AttemptContext>? Logger { get; }
 
-        public async Task<TransactionGetResult?> GetOptionalAsync(ICouchbaseCollection collection, string id)
+        public async Task<TransactionGetResult> GetAsync(ICouchbaseCollection collection, string id)
         {
-            // TODO: Update this when adding non-throwing versions to NCBC itself so that GetOptionalAsync is the root and GetAsync calls it instead.
-            try
+            var getResult = await GetOptionalAsync(collection, id).CAF();
+            if (getResult == null)
             {
-                return await GetAsync(collection, id).CAF();
+                throw new DocumentNotFoundException();
             }
-            catch (DocumentNotFoundException)
-            {
-                Logger?.LogInformation("Document '{id}' not found in collection '{collection.Name}'", Redactor.UserData(id), Redactor.UserData(collection));
-                return null;
-            }
+
+            return getResult;
         }
 
-        public async Task<TransactionGetResult?> GetAsync(ICouchbaseCollection collection, string id)
+        public async Task<TransactionGetResult?> GetOptionalAsync(ICouchbaseCollection collection, string id)
         {
             DoneCheck();
             CheckErrors();
