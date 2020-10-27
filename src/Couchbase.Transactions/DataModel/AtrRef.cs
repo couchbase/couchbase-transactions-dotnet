@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 using System.Threading.Tasks;
 using Couchbase.KeyValue;
@@ -27,6 +28,9 @@ namespace Couchbase.Transactions.DataModel
             {
                 return null;
             }
+
+            _ = anyCollection?.Scope?.Bucket?.Name ??
+                throw new ArgumentOutOfRangeException(nameof(anyCollection), "Collection was not populated.");
 
             if (anyCollection.Scope.Name == ScopeName
                 && anyCollection.Scope.Bucket.Name == BucketName

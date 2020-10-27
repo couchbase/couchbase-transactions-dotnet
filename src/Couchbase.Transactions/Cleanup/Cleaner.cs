@@ -72,15 +72,17 @@ namespace Couchbase.Transactions.Cleanup
             {
                 await TestHooks.BeforeAtrRemove(cleanupRequest.AtrId).CAF();
                 var prefix = $"{TransactionFields.AtrFieldAttempts}.{cleanupRequest.AttemptId}";
-                var specs = cleanupRequest.State switch
+                var specs = new List<MutateInSpec>();
+                if (cleanupRequest.State == AttemptStates.PENDING)
                 {
-                    AttemptStates.PENDING => MutateInSpec.Insert(
+                    specs.Add(MutateInSpec.Insert(
                         $"{prefix}.{TransactionFields.AtrFieldPendingSentinel}",
-                        0, isXattr: true),
-                    _ => MutateInSpec.Remove(prefix, isXattr: true)
-                };
+                        0, isXattr: true));
+                }
 
-                await cleanupRequest.AtrCollection.MutateInAsync(cleanupRequest.AtrId, new[] { specs },
+                specs.Add(MutateInSpec.Remove(prefix, isXattr: true));
+
+                await cleanupRequest.AtrCollection.MutateInAsync(cleanupRequest.AtrId, specs,
                     opts => opts.Timeout(_keyValueTimeout));
             }
             catch (Exception ex)

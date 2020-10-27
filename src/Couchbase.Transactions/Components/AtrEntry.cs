@@ -8,11 +8,7 @@ namespace Couchbase.Transactions.Components
 {
     internal class AtrEntry
     {
-        ////public string AtrBucket { get; }
-        ////public string AtrId { get; }
-        ////public string AttemptId { get; }
-
-        [JsonProperty(TransactionFields.TransactionId)]
+        [JsonProperty(TransactionFields.AtrFieldTransactionId)]
         public string? TransactionId { get; set; }
 
         [JsonProperty(TransactionFields.AtrFieldStatus)]

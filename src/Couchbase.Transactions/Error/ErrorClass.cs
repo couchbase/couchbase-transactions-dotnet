@@ -60,7 +60,7 @@ namespace Couchbase.Transactions.Error
                 return ErrorClass.FailPathAlreadyExists;
             }
 
-            if (ex is PathNotFoundException)
+            if (ex is PathNotFoundException || ex is PathInvalidException)
             {
                 return ErrorClass.FailPathNotFound;
             }

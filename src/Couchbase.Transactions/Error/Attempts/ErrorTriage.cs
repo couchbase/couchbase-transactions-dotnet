@@ -136,12 +136,13 @@ namespace Couchbase.Transactions.Error.Attempts
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Creating-Staged-Inserts-Protocol-20-version
             var ec = err.Classify();
+            var defaultRetry = err is TransactionOperationFailedException tofe && tofe.RetryTransaction;
             ErrorBuilder? toThrow = ec switch
             {
                 FailDocNotFound => Error(ec, err, retry: true),
                 FailPathNotFound => Error(ec, err, retry:true),
                 FailTransient => Error(ec, err, retry: true),
-                _ => Error(ec, err)
+                _ => Error(ec, err, defaultRetry)
             };
 
             return (ec, toThrow?.Build());

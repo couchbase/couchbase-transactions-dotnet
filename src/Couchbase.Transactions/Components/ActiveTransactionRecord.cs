@@ -72,17 +72,6 @@ namespace Couchbase.Transactions.Components
             return entry.ToObject<AtrEntry>();
         }
 
-        internal static DateTimeOffset? ParseMutationCasField(JToken entry, string fieldName)
-        {
-            var casString = entry.Value<string>(fieldName);
-            if (casString == null)
-            {
-                return null;
-            }
-
-            return ParseMutationCasField(casString);
-        }
-
         // ${Mutation.CAS} is written by kvengine with 'macroToString(htonll(info.cas))'.  Discussed this with KV team and,
         // though there is consensus that this is off (htonll is definitely wrong, and a string is an odd choice), there are
         // clients (SyncGateway) that consume the current string, so it can't be changed.  Note that only little-endian
@@ -133,11 +122,6 @@ namespace Couchbase.Transactions.Components
             // It's in millionths of a second
             var millis = (long) result / 1000000L;
             return DateTimeOffset.FromUnixTimeMilliseconds(millis);
-        }
-
-        private static List<DocRecord> ProcessDocumentIdArray(JToken entry, string fieldName)
-        {
-            throw new NotImplementedException();
         }
     }
 }

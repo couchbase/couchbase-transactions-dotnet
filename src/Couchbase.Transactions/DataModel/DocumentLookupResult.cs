@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
+using Couchbase.Core.Exceptions.KeyValue;
 using Couchbase.Core.IO.Transcoders;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Components;
@@ -88,8 +89,28 @@ namespace Couchbase.Transactions.DataModel
                 fullDocIndex = specs.Count - 1;
             }
 
-            var lookupInResult = await collection.LookupInAsync(id, specs, opts =>
-                opts.AccessDeleted(true).Timeout(keyValueTimeout)).CAF();
+            ILookupInResult lookupInResult;
+            try
+            {
+                lookupInResult = await collection.LookupInAsync(id, specs, opts =>
+                    opts.AccessDeleted(true).Timeout(keyValueTimeout)).CAF();
+            }
+            catch (PathInvalidException pathInvalid)
+            {
+                // TODO:  Possible NCBC fix needed?  LookupIn with AccessDeleted maybe should not be throwing PathInvalid
+                //        i.e. should gracefully handle SUBDOC_MULTI_PATH_FAILURE_DELETED
+                if (fullDocIndex != null)
+                {
+                    specs.RemoveAt(fullDocIndex.Value);
+                    fullDocIndex = null;
+                    lookupInResult = await collection.LookupInAsync(id, specs, opts =>
+                        opts.AccessDeleted(true).Timeout(keyValueTimeout)).CAF();
+                }
+                else
+                {
+                    throw;
+                }
+            }
 
             var docMeta = lookupInResult.ContentAs<DocumentMetadata>(1);
 

@@ -162,50 +162,51 @@ namespace Couchbase.Transactions
         {
             try
             {
-                // Do a Sub-Document lookup, getting all transactional metadata, the “$document” virtual xattr,
-                // and the document’s body. Timeout is set as in Timeouts.
-                var docLookupResult = await DocumentLookupResult.LookupDocumentAsync(collection, id,
-                    _config.KeyValueTimeout, fullDocument: true).CAF();
-
-                if (docLookupResult == null)
-                {
-                    return null;
-                }
-
-                var txn = docLookupResult?.TransactionXattrs;
-                if (txn?.Id?.AttemptId == null
-                    || txn?.Id?.Transactionid == null
-                    || txn?.AtrRef?.BucketName == null
-                    || txn?.AtrRef?.CollectionName == null)
-                {
-                    // Not in a transaction, or insufficient transaction metadata
-                    return docLookupResult!.IsDeleted
-                        ? null
-                        : docLookupResult.GetPreTransactionResult(_transcoder);
-                }
-
-                if (resolveMissingAtrEntry == txn.Id?.AttemptId)
-                {
-                    // This is our second attempt getting the document, and it’s in the same state as before
-                    return docLookupResult!.IsDeleted
-                        ? null
-                        : docLookupResult.GetPreTransactionResult(_transcoder);
-                }
-
                 // we need to resolve the state of that transaction. Here is where we do the “Monotonic Atomic View” (MAV) logic
                 try
                 {
+                    // Do a Sub-Document lookup, getting all transactional metadata, the “$document” virtual xattr,
+                                 // and the document’s body. Timeout is set as in Timeouts.
+                    var docLookupResult = await DocumentLookupResult.LookupDocumentAsync(collection, id,
+                    _config.KeyValueTimeout, fullDocument: true).CAF();
+
+                    if (docLookupResult == null)
+                    {
+                        return null;
+                    }
+
+                    var txn = docLookupResult?.TransactionXattrs;
+                    if (txn?.Id?.AttemptId == null
+                        || txn?.Id?.Transactionid == null
+                        || txn?.AtrRef?.BucketName == null
+                        || txn?.AtrRef?.CollectionName == null)
+                    {
+                        // Not in a transaction, or insufficient transaction metadata
+                        return docLookupResult!.IsDeleted
+                            ? null
+                            : docLookupResult.GetPreTransactionResult(_transcoder);
+                    }
+
+                    if (resolveMissingAtrEntry == txn.Id?.AttemptId)
+                    {
+                        // This is our second attempt getting the document, and it’s in the same state as before
+                        return docLookupResult!.IsDeleted
+                            ? null
+                            : docLookupResult.GetPreTransactionResult(_transcoder);
+                    }
+
+                    resolveMissingAtrEntry = txn.Id?.AttemptId;
+
                     // TODO: double-check if atr attemptid == this attempt id, and return post-transaction version
                     // (should have been covered by staged mutation check)
 
-                    var docAtrCollection = await txn.AtrRef.GetAtrCollection(_atrCollection!).CAF()
+                    var docAtrCollection = await txn.AtrRef.GetAtrCollection(_atrCollection ?? collection).CAF()
                                            ?? throw new ActiveTransactionRecordNotFoundException();
 
                     var atrEntry = await ActiveTransactionRecord.FindEntryForTransaction(docAtrCollection, txn.AtrRef.Id!,
                                        txn.Id!.AttemptId, txn.Id.Transactionid!, _config).CAF()
-                                   ?? throw new ActiveTransactionRecordNotFoundException();
+                                   ?? throw new ActiveTransactionRecordEntryNotFoundException();
 
-                    resolveMissingAtrEntry = txn.AtrRef.Id;
                     if (atrEntry.State == AttemptStates.COMMITTED || atrEntry.State == AttemptStates.COMPLETED)
                     {
                         if (txn.Operation?.Type == "remove")
@@ -223,13 +224,17 @@ namespace Couchbase.Transactions
 
                     return docLookupResult.GetPreTransactionResult(_transcoder);
                 }
+                catch (ActiveTransactionRecordEntryNotFoundException)
+                {
+                    throw;
+                }
                 catch (Exception atrLookupException)
                 {
                     var atrLookupTriage = _triage.TriageAtrLookupInMavErrors(atrLookupException);
                     throw _triage.AssertNotNull(atrLookupTriage, atrLookupException);
                 }
             }
-            catch (ActiveTransactionRecordNotFoundException)
+            catch (ActiveTransactionRecordEntryNotFoundException)
             {
                 if (resolveMissingAtrEntry == null)
                 {
@@ -238,101 +243,6 @@ namespace Couchbase.Transactions
 
                 return await GetWithMavAsync(collection, id, resolveMissingAtrEntry).CAF();
             }
-        }
-
-        // TODO: move this to a repository class
-        internal TransactionGetResult TransactionGetResultFromLookupIn(ICouchbaseCollection collection, string id,
-            (ILookupInResult doc, int atrIdIndex, int transactionIdIndex, int attemptIdIndex, int stagedDataIndex, int
-                atrBucketNameIndex, int atrColNameIndex, int transactionRestorePrefixOnlyIndex, int typeIndex, int
-                metaDocumentIndex, int fullDocumentIndex) docWithMeta)
-        {
-            var doc = docWithMeta.doc;
-
-            // TODO:  Not happy with this mess of logic spread between AttemptContext.cs and TransactionGetResult.FromLookupIn
-            (string? casFromDocument, string? revIdFromDocument, ulong? expTimeFromDocument) = (null, null, null);
-            if (doc.Exists(docWithMeta.metaDocumentIndex))
-            {
-                var docMeta = doc.ContentAs<JObject>(docWithMeta.metaDocumentIndex);
-                casFromDocument = docMeta["CAS"].Value<string>();
-                revIdFromDocument = docMeta["revid"].Value<string>();
-                expTimeFromDocument = docMeta["exptime"].Value<ulong?>();
-            }
-
-            (string? casPreTxn, string? revIdPreTxn, ulong? expTimePreTxn) = (null, null, null);
-            if (doc.Exists(docWithMeta.transactionRestorePrefixOnlyIndex))
-            {
-                var docMeta = doc.ContentAs<JObject>(docWithMeta.transactionRestorePrefixOnlyIndex);
-                if (docMeta != null)
-                {
-                    casPreTxn = docMeta["CAS"].Value<string>();
-                    revIdPreTxn = docMeta["revid"].Value<string>();
-                    expTimePreTxn = docMeta["exptime"].Value<ulong?>();
-                }
-            }
-
-            // HACK:  ContentAs<byte[]> is failing.
-            ////var preTxnContent = doc.ContentAs<byte[]>(9);
-            var asDynamic = doc.ContentAs<dynamic>(docWithMeta.fullDocumentIndex);
-            var preTxnContent = GetContentBytes(asDynamic);
-
-            TransactionGetResult getResult = TransactionGetResult.FromLookupIn(
-                collection,
-                id,
-                TransactionJsonDocumentStatus.Normal,
-                _transcoder,
-                doc.Cas,
-                preTxnContent,
-                atrId: StringIfExists(doc, docWithMeta.atrIdIndex),
-                transactionId: StringIfExists(doc, docWithMeta.transactionIdIndex),
-                attemptId: StringIfExists(doc, docWithMeta.attemptIdIndex),
-                stagedContent: StringIfExists(doc, docWithMeta.stagedDataIndex),
-                atrBucketName: StringIfExists(doc, docWithMeta.atrBucketNameIndex),
-                atrLongCollectionName: StringIfExists(doc, docWithMeta.atrColNameIndex),
-                op: StringIfExists(doc, docWithMeta.typeIndex),
-                casPreTxn: casPreTxn,
-                revidPreTxn: revIdPreTxn,
-                exptimePreTxn: expTimePreTxn,
-                casFromDocument: casFromDocument,
-                revidFromDocument: revIdFromDocument,
-                exptimeFromDocument: expTimeFromDocument
-            );
-            return getResult;
-        }
-
-        // TODO: move this to a repository class
-        internal async Task<(
-            ILookupInResult doc,
-            int atrIdIndex,
-            int transactionIdIndex,
-            int attemptIdIndex,
-            int stagedDataIndex,
-            int atrBucketNameIndex,
-            int atrColNameIndex,
-            int transactionRestorePrefixOnlyIndex,
-            int typeIndex,
-            int metaDocumentIndex,
-            int fullDocumentIndex)> LookupDocWithMetadata(ICouchbaseCollection collection, string id)
-        {
-            // TODO: promote this to a real class/struct, rather than just a named tuple.
-            var doc = await collection.LookupInAsync(
-                id,
-                specs =>
-                    specs.Get(TransactionFields.AtrId, true) // 0
-                        .Get(TransactionFields.TransactionId, isXattr: true) // 1
-                        .Get(TransactionFields.AttemptId, isXattr: true) // 2
-                        .Get(TransactionFields.StagedData, isXattr: true) // 3
-                        .Get(TransactionFields.AtrBucketName, isXattr: true) // 4
-                        .Get(TransactionFields.AtrCollName, isXattr: true) // 5
-                        .Get(TransactionFields.TransactionRestorePrefixOnly, true) // 6
-                        .Get(TransactionFields.Type, true) // 7
-                        .Get("$document", true) //  8
-                        .GetFull(), // 9
-                opts =>
-                    opts.Timeout(_config.KeyValueTimeout)
-                        .AccessDeleted(true)
-            ).CAF();
-
-            return (doc, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
         }
 
         private void CheckErrors()
@@ -453,6 +363,7 @@ namespace Couchbase.Transactions
 
         private List<MutateInSpec> CreateMutationOps(string op, object content, DocumentMetadata? dm = null)
         {
+            var atrCollectionName = _atrScopeName == null ? _atrLongCollectionName : _atrCollectionName;
             var specs = new List<MutateInSpec>
             {
                 MutateInSpec.Upsert(TransactionFields.TransactionId, _overallContext.TransactionId,
@@ -461,7 +372,7 @@ namespace Couchbase.Transactions
                 MutateInSpec.Upsert(TransactionFields.AtrId, _atrId, createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.AtrScopeName, _atrScopeName, createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.AtrBucketName, _atrBucketName, createPath: true, isXattr: true),
-                MutateInSpec.Upsert(TransactionFields.AtrCollName, _atrLongCollectionName, createPath: true, isXattr: true),
+                MutateInSpec.Upsert(TransactionFields.AtrCollName, atrCollectionName, createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.Type, op, createPath: true, isXattr: true),
                 MutateInSpec.Upsert(TransactionFields.Crc32, MutationMacro.ValueCRC32c, createPath: true, isXattr: true),
             };
@@ -524,6 +435,7 @@ namespace Couchbase.Transactions
             {
                 var result = await RepeatUntilSuccessOrThrow<TransactionGetResult?>(async () =>
                 {
+                    ulong? updatedCas = null;
                     try
                     {
                         // Check expiration again, since insert might be retried.
@@ -533,13 +445,14 @@ namespace Couchbase.Transactions
                         var contentWrapper = new JObjectContentWrapper(content);
                         List<MutateInSpec> specs = CreateMutationOps("insert", content);
                         var opts = new MutateInOptions()
+                            .AccessDeleted(true)
                             .CreateAsDeleted(true)
                             .Timeout(_config.KeyValueTimeout)
                             .StoreSemantics(StoreSemantics.Insert)
                             .Durability(_effectiveDurabilityLevel);
                         if (cas.HasValue)
                         {
-                            opts.Cas(cas.Value).StoreSemantics(StoreSemantics.Insert);
+                            opts.Cas(cas.Value).StoreSemantics(StoreSemantics.Replace);
                         }
 
                         var mutateResult = await collection.MutateInAsync(id, specs, opts).CAF();
@@ -556,6 +469,8 @@ namespace Couchbase.Transactions
                             _atrCollectionName!,
                             mutateResult,
                             _transcoder);
+
+                        updatedCas = getResult.Cas;
 
                         await _testHooks.AfterStagedInsertComplete(this, id).CAF();
 
@@ -577,26 +492,26 @@ namespace Couchbase.Transactions
                                 return (RepeatAction.RepeatWithDelay, null);
                             case ErrorClass.FailCasMismatch:
                             case ErrorClass.FailDocAlreadyExists:
-                                await RepeatUntilSuccessOrThrow(async () =>
+                                var repeatAction = await RepeatUntilSuccessOrThrow<RepeatAction>(async () =>
                                 {
                                     // handle FAIL_DOC_ALREADY_EXISTS
                                     try
                                     {
                                         await _testHooks.BeforeGetDocInExistsDuringStagedInsert(this, id).CAF();
-                                        var docWithMeta = await LookupDocWithMetadata(collection, id).CAF();
-                                        var doc = docWithMeta.doc;
+                                        var docWithMeta = await DocumentLookupResult.LookupDocumentAsync(collection, id, null, false).CAF();
 
                                         var docInATransaction =
-                                            doc.Exists(docWithMeta.atrIdIndex) &&
-                                            !string.IsNullOrEmpty(doc.ContentAs<string>(docWithMeta.atrIdIndex));
+                                            docWithMeta.TransactionXattrs?.Id?.Transactionid != null;
 
-                                        if (doc.IsDeleted && !docInATransaction)
+                                        if (docWithMeta.IsDeleted && !docInATransaction)
                                         {
                                             // If the doc is a tombstone and not in any transaction
                                             // -> It’s ok to go ahead and overwrite.
-                                            // Perform this algorithm from the top with cas=the cas from the get.
-                                            cas = doc.Cas;
-                                            return RepeatAction.RepeatNoDelay;
+                                            // Perform this algorithm (createStagedInsert) from the top with cas=the cas from the get.
+                                            cas = docWithMeta.Cas;
+
+                                            // (innerRepeat, createStagedInsertRepeat)
+                                            return (RepeatAction.NoRepeat, RepeatAction.RepeatNoDelay);
                                         }
 
                                         // Else if the doc is not in a transaction
@@ -611,23 +526,24 @@ namespace Couchbase.Transactions
                                         else
                                         {
                                             // Else call the CheckWriteWriteConflict logic, which conveniently does everything we need to handle the above cases.
-                                            var getResult = TransactionGetResultFromLookupIn(collection, id, docWithMeta);
+                                            var getResult = docWithMeta.GetPostTransactionResult(_transcoder,
+                                                TransactionJsonDocumentStatus.InTxnOther);
                                             await CheckWriteWriteConflict(getResult).CAF();
 
                                             // If this logic succeeds, we are ok to overwrite the doc.
-                                            // Perform this algorithm from the top, with cas=the cas from the get.
-                                            cas = getResult.Cas;
-                                            return RepeatAction.RepeatNoDelay;
+                                            // Perform this algorithm (createStagedInsert) from the top, with cas=the cas from the get.
+                                            cas = docWithMeta.Cas;
+                                            return (RepeatAction.NoRepeat, RepeatAction.RepeatNoDelay);
                                         }
                                     }
                                     catch (Exception exDocExists)
                                     {
-                                        var triagedDocExists = _triage.TriageDocExistsOnStagedInsertErrors(ex);
+                                        var triagedDocExists = _triage.TriageDocExistsOnStagedInsertErrors(exDocExists);
                                         throw _triage.AssertNotNull(triagedDocExists, exDocExists);
                                     }
                                 }).CAF();
 
-                                return (RepeatAction.NoRepeat, null);
+                                return (repeatAction, null);
                         }
 
                         throw _triage.AssertNotNull(triaged, ex);
@@ -1498,69 +1414,85 @@ namespace Couchbase.Transactions
             var sw = Stopwatch.StartNew();
             await RepeatUntilSuccessOrThrow(async () =>
             {
+                var getOtherAtrTask = gr.TransactionXattrs?.AtrRef?.GetAtrCollection(gr.Collection);
+                if (getOtherAtrTask == null)
+                {
+                    // If gr has no transaction Metadata, it’s fine to proceed.
+                    return RepeatAction.NoRepeat;
+                }
+
+                if (gr.TransactionXattrs?.Id?.Transactionid == _overallContext.TransactionId)
+                {
+                    // Else, if transaction A == transaction B, it’s fine to proceed
+                    return RepeatAction.NoRepeat;
+                }
+
+                // If the transaction has expired, enter ExpiryOvertimeMode and raise Error(ec=FAIL_EXPIRY, raise=TRANSACTION_EXPIRED).
+                CheckExpiry();
+
+                // Do a lookupIn call to fetch the ATR entry for B.
+                ICouchbaseCollection? otherAtrCollection = null;
                 try
                 {
-                    var getOtherAtrTask = gr.TransactionXattrs?.AtrRef?.GetAtrCollection(gr.Collection);
-                    if (getOtherAtrTask == null)
-                    {
-                        // If gr has no transaction Metadata, it’s fine to proceed.
-                        return RepeatAction.NoRepeat;
-                    }
-
-                    if (gr.TransactionXattrs?.Id?.Transactionid == _overallContext.TransactionId)
-                    {
-                        // Else, if transaction A == transaction B, it’s fine to proceed
-                        return RepeatAction.NoRepeat;
-                    }
-
-                    // If the transaction has expired, enter ExpiryOvertimeMode and raise Error(ec=FAIL_EXPIRY, raise=TRANSACTION_EXPIRED).
-                    CheckExpiry();
-
                     await _testHooks.BeforeCheckAtrEntryForBlockingDoc(this, _atrId!).CAF();
-
-                    // Do a lookupIn call to fetch the ATR entry for B.
-                    var otherAtrCollection = await getOtherAtrTask!.CAF();
-                    if (otherAtrCollection == null)
-                    {
-                        // we couldn't get the ATR collection, which means that the entry was bad
-                        // --OR-- the bucket/collection/scope was deleted/locked/rebalanced
-                        // TODO: the spec gives no method of handling this.
-                        throw CreateError(this, ErrorClass.FailHard)
-                            .Cause(new Exception(
-                                $"ATR entry '{Redactor.SystemData(gr?.TransactionXattrs?.AtrRef?.ToString())}' could not be read.",
-                                new DocumentNotFoundException()))
-                            .Build();
-                    }
-
-                    var txn = gr.TransactionXattrs ?? throw new ArgumentNullException(nameof(gr.TransactionXattrs));
-                    txn.ValidateMinimum();
-                    var otherAtr
-                        = await ActiveTransactionRecord.FindEntryForTransaction(otherAtrCollection,
-                            txn.AtrRef!.Id!, txn.Id!.AttemptId!,
-                            txn.Id.Transactionid!, _config).CAF();
-
-                    if (otherAtr == null)
-                    {
-                        // cleanup occurred, OK to proceed.
-                        return RepeatAction.NoRepeat;
-                    }
-
-                    if (otherAtr.State == AttemptStates.COMPLETED || otherAtr.State == AttemptStates.ROLLED_BACK)
-                    {
-                        // ok to proceed
-                        return RepeatAction.NoRepeat;
-                    }
+                    otherAtrCollection = await getOtherAtrTask!.CAF();
                 }
                 catch (Exception err)
                 {
-                    if (sw.Elapsed > TimeSpan.FromSeconds(1))
-                    {
-                        throw CreateError(this, ErrorClass.FailWriteWriteConflict, err)
-                            .RetryTransaction()
-                            .Build();
-                    }
+                    throw CreateError(this, ErrorClass.FailWriteWriteConflict, err)
+                        .RetryTransaction()
+                        .Build();
+                }
 
-                    throw;
+                if (otherAtrCollection == null)
+                {
+                    // we couldn't get the ATR collection, which means that the entry was bad
+                    // --OR-- the bucket/collection/scope was deleted/locked/rebalanced
+                    // TODO: the spec gives no method of handling this.
+                    throw CreateError(this, ErrorClass.FailHard)
+                        .Cause(new Exception(
+                            $"ATR entry '{Redactor.SystemData(gr?.TransactionXattrs?.AtrRef?.ToString())}' could not be read.",
+                            new DocumentNotFoundException()))
+                        .Build();
+                }
+
+                var txn = gr.TransactionXattrs ?? throw new ArgumentNullException(nameof(gr.TransactionXattrs));
+                txn.ValidateMinimum();
+                var otherAtr
+                    = await ActiveTransactionRecord.FindEntryForTransaction(otherAtrCollection,
+                        txn.AtrRef!.Id!, txn.Id!.AttemptId!,
+                        txn.Id.Transactionid!, _config).CAF();
+
+                if (otherAtr == null)
+                {
+                    // cleanup occurred, OK to proceed.
+                    return RepeatAction.NoRepeat;
+                }
+
+                if (otherAtr.TimestampStartMsecs != null
+                    && otherAtr.ExpiresAfterMsecs != null)
+                {
+                    var expiresAt =
+                        otherAtr.TimestampStartMsecs.Value.AddMilliseconds(otherAtr.ExpiresAfterMsecs.Value);
+                    Logger?.LogCritical($"CheckWriteWriteConflict otherAtr.expiresAt = {expiresAt}");
+                    if (expiresAt - DateTimeOffset.UtcNow < TimeSpan.Zero)
+                    {
+                        // Other ATR expired.
+                        return RepeatAction.NoRepeat;
+                    }
+                }
+
+                if (otherAtr.State == AttemptStates.COMPLETED || otherAtr.State == AttemptStates.ROLLED_BACK)
+                {
+                    // ok to proceed
+                    return RepeatAction.NoRepeat;
+                }
+
+                if (sw.Elapsed > TimeSpan.FromSeconds(1))
+                {
+                    throw CreateError(this, ErrorClass.FailWriteWriteConflict)
+                        .RetryTransaction()
+                        .Build();
                 }
 
                 return RepeatAction.RepeatWithBackoff;
