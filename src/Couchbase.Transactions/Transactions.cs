@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -172,6 +173,7 @@ namespace Couchbase.Transactions
             List<TransactionAttempt> attempts)
         {
 
+            var attemptWatch = Stopwatch.StartNew();
             var ctx = new AttemptContext(
                 overallContext,
                 Config,
@@ -190,6 +192,7 @@ namespace Couchbase.Transactions
                     await transactionLogic(ctx).CAF();
                     await ctx.AutoCommit().CAF();
                     var attempt = ctx.ToAttempt();
+                    attempt.TimeTaken = attemptWatch.Elapsed;
                     attempts.Add(attempt);
                 }
                 catch (TransactionOperationFailedException)
@@ -241,6 +244,7 @@ namespace Couchbase.Transactions
                     //  AddCleanupRequest, if the cleanup thread is configured to be running.
                     var errAttempt = ctx.ToAttempt();
                     errAttempt.TermindatedByException = ex;
+                    errAttempt.TimeTaken = attemptWatch.Elapsed;
                     attempts.Add(errAttempt);
                 }
 

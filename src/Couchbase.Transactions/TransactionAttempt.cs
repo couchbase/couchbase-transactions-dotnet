@@ -6,13 +6,21 @@ using Couchbase.Core;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Log;
 using Couchbase.Transactions.Support;
+using Newtonsoft.Json;
 
 namespace Couchbase.Transactions
 {
     public class TransactionAttempt
     {
         public TimeSpan TimeTaken { get; internal set; }
+
+        [JsonIgnore]
         public ICouchbaseCollection? AtrCollection { get; internal set; }
+
+        public string? AtrCollectionName => AtrCollection?.Name;
+        public string? AtrScopeName => AtrCollection?.Scope?.Name;
+        public string? AtrBucketName => AtrCollection?.Scope?.Bucket?.Name;
+
         public string? AtrId { get; internal set; }
         public AttemptStates FinalState { get; internal set; }
         public string AttemptId { get; internal set; }
