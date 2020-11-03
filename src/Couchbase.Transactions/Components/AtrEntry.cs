@@ -8,6 +8,8 @@ namespace Couchbase.Transactions.Components
 {
     internal class AtrEntry
     {
+        private static readonly IList<DocRecord> EmptyDocRecords = new List<DocRecord>().AsReadOnly();
+
         [JsonProperty(TransactionFields.AtrFieldTransactionId)]
         public string? TransactionId { get; set; }
 
@@ -48,13 +50,13 @@ namespace Couchbase.Transactions.Components
         public int? ExpiresAfterMsecs { get; set; }
 
         [JsonProperty(TransactionFields.AtrFieldDocsInserted)]
-        public IList<DocRecord> InsertedIds { get; set; }
+        public IList<DocRecord> InsertedIds { get; set; } = EmptyDocRecords;
 
         [JsonProperty(TransactionFields.AtrFieldDocsReplaced)]
-        public IList<DocRecord> ReplacedIds { get; set; }
+        public IList<DocRecord> ReplacedIds { get; set; } = EmptyDocRecords;
 
         [JsonProperty(TransactionFields.AtrFieldDocsRemoved)]
-        public IList<DocRecord> RemovedIds { get; set; }
+        public IList<DocRecord> RemovedIds { get; set; } = EmptyDocRecords;
 
         public ulong? Cas { get; }
     }

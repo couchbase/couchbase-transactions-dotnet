@@ -113,7 +113,7 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
 
         public uint? Cid { get; }
         public string Name { get; } = "default";
-        public IScope Scope { get; set; }
-        public IBinaryCollection Binary { get; }
+        public IScope Scope { get; set; } = new Mock<IScope>().Object;
+        public IBinaryCollection Binary { get; } = new Mock<IBinaryCollection>().Object;
     }
 }

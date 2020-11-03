@@ -23,12 +23,12 @@ namespace Couchbase.Transactions
 
         public string? AtrId { get; internal set; }
         public AttemptStates FinalState { get; internal set; }
-        public string AttemptId { get; internal set; }
-        public IEnumerable<string> StagedInsertedIds { get; internal set; }
-        public IEnumerable<string> StagedReplaceIds { get; internal set; }
-        public IEnumerable<string> StagedRemoveIds { get; internal set; }
-        public Exception? TermindatedByException { get; internal set; }
-        public IEnumerable<MutationToken> MutationTokens { get; internal set; }
+        public string AttemptId { get; internal set; } = string.Empty;
+        public IEnumerable<string> StagedInsertedIds { get; internal set; } = Enumerable.Empty<string>();
+        public IEnumerable<string> StagedReplaceIds { get; internal set; } = Enumerable.Empty<string>();
+        public IEnumerable<string> StagedRemoveIds { get; internal set; } = Enumerable.Empty<string>();
+        public Exception? TermindatedByException { get; internal set; } = null;
+        public IEnumerable<MutationToken> MutationTokens { get; internal set; } = Enumerable.Empty<MutationToken>();
 
         public override string ToString()
         {

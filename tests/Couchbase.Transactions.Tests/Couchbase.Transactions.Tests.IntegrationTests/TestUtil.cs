@@ -32,7 +32,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             return durability;
         }
 
-        public static async Task<(ICouchbaseCollection collection, string docId, object sampleDoc)> PrepSampleDoc(ClusterFixture fixture, [CallerMemberName]string? testName = nameof(PrepSampleDoc))
+        public static async Task<(ICouchbaseCollection collection, string docId, object sampleDoc)> PrepSampleDoc(ClusterFixture fixture, [CallerMemberName]string testName = nameof(PrepSampleDoc))
         {
             var defaultCollection = await fixture.GetDefaultCollection();
             var docId = Guid.NewGuid().ToString();

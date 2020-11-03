@@ -15,7 +15,7 @@ namespace Couchbase.Transactions.Cleanup
 
         internal Exception? FailureReason { get; }
 
-        public TransactionCleanupAttempt(bool success, bool isRegular, CleanupRequest request, Exception failureReason = null)
+        public TransactionCleanupAttempt(bool success, bool isRegular, CleanupRequest request, Exception? failureReason = null)
         {
             Success = success;
             IsRegular = isRegular;

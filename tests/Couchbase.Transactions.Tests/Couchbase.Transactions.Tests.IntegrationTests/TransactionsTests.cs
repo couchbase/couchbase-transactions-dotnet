@@ -562,7 +562,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                         await DocumentLookupResult.LookupDocumentAsync(defaultCollection, docId, null, true);
 
                     Assert.NotNull(documentLookupResult?.TransactionXattrs);
-                    Assert.NotNull(documentLookupResult.StagedContent?.ContentAs<object>());
+                    Assert.NotNull(documentLookupResult?.StagedContent?.ContentAs<object>());
                     _outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
                 });
 
