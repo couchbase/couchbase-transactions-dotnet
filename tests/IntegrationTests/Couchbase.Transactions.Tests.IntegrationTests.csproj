@@ -17,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\src\Couchbase.Transactions\Couchbase.Transactions.csproj" />
+    <ProjectReference Include="..\..\src\Couchbase.Transactions\Couchbase.Transactions.csproj" />
   </ItemGroup>
 
   <ItemGroup>
