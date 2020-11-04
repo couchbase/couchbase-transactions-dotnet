@@ -9,7 +9,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase.Transactions.Test
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CouchbaseTransactionExample", "example\CouchbaseTransactionExample\CouchbaseTransactionExample.csproj", "{F463310C-5A0D-4196-AFFA-AC741E9BC8C8}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase.Transactions.Tests.IntegrationTests", "tests\Couchbase.Transactions.Tests\Couchbase.Transactions.Tests.IntegrationTests\Couchbase.Transactions.Tests.IntegrationTests.csproj", "{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase.Transactions.Tests.IntegrationTests", "tests\IntegrationTests\Couchbase.Transactions.Tests.IntegrationTests.csproj", "{AF2343F2-9D92-40DF-A1E1-EDB8F11439AD}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -29,10 +29,10 @@ Global
 		{F463310C-5A0D-4196-AFFA-AC741E9BC8C8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F463310C-5A0D-4196-AFFA-AC741E9BC8C8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F463310C-5A0D-4196-AFFA-AC741E9BC8C8}.Release|Any CPU.Build.0 = Release|Any CPU
-		{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{937AD5DC-06B7-4BC9-A4B7-A7F7B550214E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AF2343F2-9D92-40DF-A1E1-EDB8F11439AD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AF2343F2-9D92-40DF-A1E1-EDB8F11439AD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AF2343F2-9D92-40DF-A1E1-EDB8F11439AD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AF2343F2-9D92-40DF-A1E1-EDB8F11439AD}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
