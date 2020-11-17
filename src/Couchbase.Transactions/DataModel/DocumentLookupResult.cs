@@ -48,18 +48,17 @@ namespace Couchbase.Transactions.DataModel
 
         internal ICouchbaseCollection DocumentCollection { get; }
 
-        public TransactionGetResult GetPreTransactionResult(ITypeTranscoder transcoder)
+        public TransactionGetResult GetPreTransactionResult()
         {
             return TransactionGetResult.FromNonTransactionDoc(
                 collection: DocumentCollection,
                 id: Id,
                 content: UnstagedContent ?? throw new ArgumentNullException(nameof(UnstagedContent)),
                 cas: Cas,
-                documentMetadata: DocumentMetadata,
-                transcoder: transcoder);
+                documentMetadata: DocumentMetadata);
         }
 
-        public TransactionGetResult GetPostTransactionResult(ITypeTranscoder transcoder, TransactionJsonDocumentStatus txnJsonStatus)
+        public TransactionGetResult GetPostTransactionResult(TransactionJsonDocumentStatus txnJsonStatus)
         {
             return TransactionGetResult.FromStaged(
                 DocumentCollection,
@@ -68,8 +67,7 @@ namespace Couchbase.Transactions.DataModel
                 Cas,
                 DocumentMetadata,
                 txnJsonStatus,
-                TransactionXattrs,
-                transcoder
+                TransactionXattrs
             );
         }
 
@@ -131,7 +129,6 @@ namespace Couchbase.Transactions.DataModel
 
             if (lookupInResult.Exists(0))
             {
-                var jobj = lookupInResult.ContentAs<JObject>(0);
                 result.TransactionXattrs = lookupInResult.ContentAs<TransactionXattrs>(0);
             }
 

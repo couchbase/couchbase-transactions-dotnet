@@ -52,5 +52,6 @@ namespace Couchbase.Transactions.Support
         public const string PreTxnExptime = TransactionRestorePrefix + "exptime";
 
         public const string StagedDataRemoveKeyword ="<<REMOVE>>";
+        public static readonly byte[] StagedDataRemoveKeywordBytes = Encoding.UTF8.GetBytes(StagedDataRemoveKeyword);
     }
 }

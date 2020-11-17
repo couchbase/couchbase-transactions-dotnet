@@ -38,22 +38,11 @@ namespace Couchbase.Transactions
         private readonly Cleaner _cleaner;
 
         public TransactionConfig Config { get; }
-
-        private readonly ITypeTranscoder _typeTranscoder;
-
         public string TransactionId { get; } = Guid.NewGuid().ToString();
 
         internal ICluster Cluster => _cluster;
 
         internal ITestHooks TestHooks { get; set; } = DefaultTestHooks.Instance;
-        ////public ICleanupTestHooks CleanupTestHooks
-        ////{
-        ////    get => _cleanupWorkQueue.TestHooks;
-        ////    set
-        ////    {
-        ////        _cleanupWorkQueue.TestHooks = value;
-        ////    }
-        ////}
 
         internal ICleanupTestHooks CleanupTestHooks
         {
@@ -65,8 +54,6 @@ namespace Couchbase.Transactions
         {
             _cluster = cluster ?? throw new ArgumentNullException(nameof(cluster));
             Config = config ?? throw new ArgumentNullException(nameof(config));
-            _typeTranscoder = _cluster.ClusterServices?.GetService(typeof(ITypeTranscoder)) as ITypeTranscoder ??
-                              throw new InvalidArgumentException($"{nameof(ITypeTranscoder)}Necessary type not registered.");
             _redactor = _cluster.ClusterServices?.GetService(typeof(IRedactor)) as IRedactor ?? DefaultRedactor.Instance;
             Interlocked.Increment(ref InstancesCreated);
             if (config.CleanupLostAttempts)
@@ -181,7 +168,6 @@ namespace Couchbase.Transactions
                 this,
                 TestHooks,
                 _redactor,
-                _typeTranscoder,
                 loggerFactory
             );
 

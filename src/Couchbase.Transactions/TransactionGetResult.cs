@@ -14,7 +14,6 @@ namespace Couchbase.Transactions
     public class TransactionGetResult
     {
         private readonly IContentAsWrapper _content;
-        private readonly ITypeTranscoder _transcoder; // TODO: this should no longer be necessary
 
         public static readonly TransactionGetResult? Empty = null;
 
@@ -25,8 +24,7 @@ namespace Couchbase.Transactions
             [NotNull] ICouchbaseCollection collection,
             TransactionXattrs? transactionXattrs,
             TransactionJsonDocumentStatus status,
-            DocumentMetadata? documentMetadata,
-            ITypeTranscoder transcoder)
+            DocumentMetadata? documentMetadata)
         {
             Id = id;
             FullyQualifiedId = GetFullyQualifiedId(collection, id);
@@ -36,7 +34,6 @@ namespace Couchbase.Transactions
             TransactionXattrs = transactionXattrs;
             Status = status;
             DocumentMetadata = documentMetadata;
-            _transcoder = transcoder;
         }
 
         internal TransactionJsonDocumentStatus Status { get; }
@@ -63,8 +60,7 @@ namespace Couchbase.Transactions
             string atrBucketName,
             string atrScopeName,
             string atrCollectionName,
-            IMutateInResult updatedDoc,
-            ITypeTranscoder transcoder
+            IMutateInResult updatedDoc
             )
         {
             var txn = new TransactionXattrs();
@@ -89,8 +85,7 @@ namespace Couchbase.Transactions
                 collection,
                 txn,
                 TransactionJsonDocumentStatus.Normal,
-                null,
-                transcoder
+                null
             );
         }
 
@@ -108,79 +103,11 @@ namespace Couchbase.Transactions
                 doc.Collection,
                 doc.TransactionXattrs,
                 status,
-                doc.DocumentMetadata,
-                doc._transcoder
+                doc.DocumentMetadata
                 );
         }
 
-        [Obsolete]
-        internal static TransactionGetResult FromLookupIn(
-            ICouchbaseCollection collection,
-            string id,
-            TransactionJsonDocumentStatus status,
-            ITypeTranscoder transcoder,
-            ulong lookupInCas,
-            IContentAsWrapper preTxnContent,
-            string? atrId = null,
-            string? transactionId = null,
-            string? attemptId = null,
-            string? stagedContent = null,
-            string? atrBucketName = null,
-            string? atrLongCollectionName = null,
-
-            // Read from xattrs.txn.restore
-            string? casPreTxn = null,
-            string? revidPreTxn = null,
-            ulong? exptimePreTxn = null,
-
-            // Read from $document
-            string? casFromDocument = null,
-            string? revidFromDocument = null,
-            ulong? exptimeFromDocument = null,
-
-            string? op = null)
-        {
-            // TODO: check stagedContent for "<<REMOVE>>" sentinel value
-            string? atrCollectionName = null;
-            string? atrScopeName = null;
-            if (atrLongCollectionName != null)
-            {
-                var pieces = atrLongCollectionName.Split('.');
-                (atrScopeName, atrCollectionName) = (pieces[0], pieces[1]);
-            }
-
-            var dm = new DocumentMetadata()
-            {
-                // TODO: When data access is refactored, make sure Crc32c is included here.
-                Cas = casFromDocument, RevId = revidFromDocument, ExpTime = exptimeFromDocument,
-            };
-
-            return new TransactionGetResult(
-                id,
-                preTxnContent,
-                lookupInCas,
-                collection,
-                null, // FIXME
-                status,
-                dm,
-                transcoder);
-        }
-
-        ////public static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection docCollection, DocumentWithTransactionMetadata docWithMeta, ITypeTranscoder transcoder)
-        ////{
-        ////    return new TransactionGetResult(
-        ////        id: docWithMeta.Id,
-        ////        content: docWithMeta.PreTransactionContent ?? Array.Empty<byte>(),
-        ////        cas: docWithMeta.LookupInResult.Cas,
-        ////        collection: docCollection,
-        ////        transactionXattrs: null,
-        ////        status: TransactionJsonDocumentStatus.Normal,
-        ////        documentMetadata: docWithMeta.DocumentMetadata,
-        ////        transcoder: transcoder
-        ////    );
-        ////}
-
-        internal static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection collection, string id, IContentAsWrapper content, ulong cas, DocumentMetadata documentMetadata, ITypeTranscoder transcoder)
+        internal static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection collection, string id, IContentAsWrapper content, ulong cas, DocumentMetadata documentMetadata)
         {
             return new TransactionGetResult(
                 id: id,
@@ -189,12 +116,11 @@ namespace Couchbase.Transactions
                 collection: collection,
                 transactionXattrs: null,
                 status: TransactionJsonDocumentStatus.Normal,
-                documentMetadata: documentMetadata,
-                transcoder: transcoder
+                documentMetadata: documentMetadata
             );
         }
 
-        internal static TransactionGetResult FromStaged(ICouchbaseCollection collection, string id, IContentAsWrapper stagedContent, ulong cas, DocumentMetadata documentMetadata, TransactionJsonDocumentStatus status, TransactionXattrs? txn, ITypeTranscoder transcoder)
+        internal static TransactionGetResult FromStaged(ICouchbaseCollection collection, string id, IContentAsWrapper stagedContent, ulong cas, DocumentMetadata documentMetadata, TransactionJsonDocumentStatus status, TransactionXattrs? txn)
         {
             return new TransactionGetResult(
                 id,
@@ -203,8 +129,7 @@ namespace Couchbase.Transactions
                 collection,
                 txn,
                 status,
-                documentMetadata,
-                transcoder
+                documentMetadata
                 );
         }
     }

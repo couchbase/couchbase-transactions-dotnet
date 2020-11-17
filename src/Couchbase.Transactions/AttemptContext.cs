@@ -35,6 +35,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using static Couchbase.Transactions.Error.ErrorBuilder;
 using Exception = System.Exception;
+using ILoggerFactory = Microsoft.Extensions.Logging.ILoggerFactory;
 
 namespace Couchbase.Transactions
 {
@@ -46,7 +47,6 @@ namespace Couchbase.Transactions
         private readonly Transactions _parent;
         private readonly ITestHooks _testHooks;
         internal IRedactor Redactor { get; }
-        private readonly ITypeTranscoder _transcoder;
         private AttemptStates _state = AttemptStates.NOTHING_WRITTEN;
         private readonly ErrorTriage _triage;
 
@@ -71,7 +71,6 @@ namespace Couchbase.Transactions
             Transactions parent,
             ITestHooks? testHooks,
             IRedactor redactor,
-            ITypeTranscoder transcoder,
             Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
         {
             _attemptId = attemptId ?? throw new ArgumentNullException(nameof(attemptId));
@@ -80,7 +79,6 @@ namespace Couchbase.Transactions
             _parent = parent ?? throw new ArgumentNullException(nameof(parent));
             _testHooks = testHooks ?? DefaultTestHooks.Instance;
             Redactor = redactor ?? throw new ArgumentNullException(nameof(redactor));
-            _transcoder = transcoder ?? throw new ArgumentNullException(nameof(transcoder));
             _effectiveDurabilityLevel = _overallContext.PerConfig?.DurabilityLevel ?? config.DurabilityLevel;
             Logger = loggerFactory?.CreateLogger<AttemptContext>();
             _triage = new ErrorTriage(this, _testHooks, loggerFactory);
@@ -184,7 +182,7 @@ namespace Couchbase.Transactions
                         // Not in a transaction, or insufficient transaction metadata
                         return docLookupResult!.IsDeleted
                             ? null
-                            : docLookupResult.GetPreTransactionResult(_transcoder);
+                            : docLookupResult.GetPreTransactionResult();
                     }
 
                     if (resolveMissingAtrEntry == txn.Id?.AttemptId)
@@ -192,7 +190,7 @@ namespace Couchbase.Transactions
                         // This is our second attempt getting the document, and it’s in the same state as before
                         return docLookupResult!.IsDeleted
                             ? null
-                            : docLookupResult.GetPreTransactionResult(_transcoder);
+                            : docLookupResult.GetPreTransactionResult();
                     }
 
                     resolveMissingAtrEntry = txn.Id?.AttemptId;
@@ -214,7 +212,7 @@ namespace Couchbase.Transactions
                             return null;
                         }
 
-                        return docLookupResult!.GetPostTransactionResult(_transcoder, TransactionJsonDocumentStatus.InTxnCommitted);
+                        return docLookupResult!.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnCommitted);
                     }
 
                     if (docLookupResult!.IsDeleted || txn.Operation?.Type == "insert")
@@ -222,7 +220,7 @@ namespace Couchbase.Transactions
                         return null;
                     }
 
-                    return docLookupResult.GetPreTransactionResult(_transcoder);
+                    return docLookupResult.GetPreTransactionResult();
                 }
                 catch (ActiveTransactionRecordEntryNotFoundException)
                 {
@@ -340,8 +338,7 @@ namespace Couchbase.Transactions
                         _atrBucketName!,
                         _atrScopeName!,
                         _atrCollectionName!,
-                        updatedDoc,
-                        _transcoder);
+                        updatedDoc);
                 }
                 catch (Exception ex)
                 {
@@ -467,8 +464,7 @@ namespace Couchbase.Transactions
                             _atrBucketName!,
                             _atrScopeName!,
                             _atrCollectionName!,
-                            mutateResult,
-                            _transcoder);
+                            mutateResult);
 
                         updatedCas = getResult.Cas;
 
@@ -526,8 +522,7 @@ namespace Couchbase.Transactions
                                         else
                                         {
                                             // Else call the CheckWriteWriteConflict logic, which conveniently does everything we need to handle the above cases.
-                                            var getResult = docWithMeta.GetPostTransactionResult(_transcoder,
-                                                TransactionJsonDocumentStatus.InTxnOther);
+                                            var getResult = docWithMeta.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnOther);
                                             await CheckWriteWriteConflict(getResult).CAF();
 
                                             // If this logic succeeds, we are ok to overwrite the doc.
@@ -637,9 +632,12 @@ namespace Couchbase.Transactions
 
         private byte[] GetContentBytes(object content)
         {
+            // TODO: Shouldn't need to new this up each time.
+            //       This will be fixed when data access is refactored.
+            var transcoder = new RawBinaryTranscoder();
             using var memoryStream = new MemoryStream();
-            var flags = _transcoder.GetFormat(content);
-            _transcoder.Encode(memoryStream, content, flags, OpCode.Add);
+            var flags = transcoder.GetFormat(content);
+            transcoder.Encode(memoryStream, content, flags, OpCode.Add);
             var contentBytes = memoryStream.GetBuffer();
             return contentBytes;
         }
@@ -669,7 +667,6 @@ namespace Couchbase.Transactions
                 try
                 {
                     await _testHooks.BeforeStagedRemove(this, doc.Id).CAF();
-                    var contentBytes = GetContentBytes(TransactionFields.StagedDataRemoveKeyword);
                     var specs = CreateMutationOps(op: "remove", TransactionFields.StagedDataRemoveKeyword, doc.DocumentMetadata);
 
                     var opts = new MutateInOptions()
@@ -1181,8 +1178,6 @@ namespace Couchbase.Transactions
         }
 
         public Task RollbackAsync() => this.RollbackInternal(true);
-
-        public Task DeferAsync() => throw new NotImplementedException();
 
         internal TransactionAttempt ToAttempt()
         {
