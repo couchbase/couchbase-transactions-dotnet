@@ -14,7 +14,7 @@ namespace Couchbase.Transactions.DataModel
 {
     public class DocumentLookupResult
     {
-        private DocumentLookupResult(
+        internal DocumentLookupResult(
             string id,
             IContentAsWrapper? unstagedContent,
             IContentAsWrapper? stagedContent,
@@ -69,70 +69,6 @@ namespace Couchbase.Transactions.DataModel
                 txnJsonStatus,
                 TransactionXattrs
             );
-        }
-
-        public static async Task<DocumentLookupResult> LookupDocumentAsync(ICouchbaseCollection collection, string id, TimeSpan? keyValueTimeout, bool fullDocument = true)
-        {
-            var specs = new List<LookupInSpec>()
-            {
-                LookupInSpec.Get(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true),
-                LookupInSpec.Get("$document", isXattr: true),
-                LookupInSpec.Get(TransactionFields.StagedData, isXattr: true)
-            };
-
-            int? fullDocIndex = null;
-            if (fullDocument)
-            {
-                specs.Add(LookupInSpec.GetFull());
-                fullDocIndex = specs.Count - 1;
-            }
-
-            ILookupInResult lookupInResult;
-            try
-            {
-                lookupInResult = await collection.LookupInAsync(id, specs, opts =>
-                    opts.AccessDeleted(true).Timeout(keyValueTimeout)).CAF();
-            }
-            catch (PathInvalidException pathInvalid)
-            {
-                // TODO:  Possible NCBC fix needed?  LookupIn with AccessDeleted maybe should not be throwing PathInvalid
-                //        i.e. should gracefully handle SUBDOC_MULTI_PATH_FAILURE_DELETED
-                if (fullDocIndex != null)
-                {
-                    specs.RemoveAt(fullDocIndex.Value);
-                    fullDocIndex = null;
-                    lookupInResult = await collection.LookupInAsync(id, specs, opts =>
-                        opts.AccessDeleted(true).Timeout(keyValueTimeout)).CAF();
-                }
-                else
-                {
-                    throw;
-                }
-            }
-
-            var docMeta = lookupInResult.ContentAs<DocumentMetadata>(1);
-
-            IContentAsWrapper? unstagedContent = fullDocIndex.HasValue
-                ? new LookupInContentAsWrapper(lookupInResult, fullDocIndex.Value)
-                : null;
-
-            var stagedContent = lookupInResult.Exists(2)
-                ? new LookupInContentAsWrapper(lookupInResult, 2)
-                : null;
-
-            var result = new DocumentLookupResult(id,
-                unstagedContent,
-                stagedContent,
-                lookupInResult,
-                docMeta,
-                collection);
-
-            if (lookupInResult.Exists(0))
-            {
-                result.TransactionXattrs = lookupInResult.ContentAs<TransactionXattrs>(0);
-            }
-
-            return result;
         }
     }
 }

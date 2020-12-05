@@ -52,12 +52,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
             return bucket;
         }
 
-        public async Task<ICouchbaseCollection> GetDefaultCollection()
-        {
-            var bucket = await GetDefaultBucket().ConfigureAwait(false);
-            return bucket.DefaultCollection();
-        }
-
         internal static TestSettings GetSettings()
         {
             return new ConfigurationBuilder()
@@ -76,14 +70,27 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
                 .Get<ClusterOptions>();
         }
 
-        public void DumpLogs(ITestOutputHelper outputHelper, [CallerMemberName] string testName = "")
+        public async Task<ICluster> OpenClusterAsync(ITestOutputHelper outputHelper)
         {
-            outputHelper.WriteLine(Logs.ToString());
+            var opts = GetClusterOptions().WithLogging(new TestOutputLoggerFactory(outputHelper));
+            var cluster = await Couchbase.Cluster.ConnectAsync(
+                    _settings.ConnectionString,
+                    opts)
+                .ConfigureAwait(false);
+
+            return cluster;
+        }
+
+        public async Task<ICouchbaseCollection> OpenDefaultCollection(ITestOutputHelper outputHelper)
+        {
+            var cluster = await OpenClusterAsync(outputHelper);
+            var bucket = await cluster.BucketAsync(BucketName);
+            return bucket.DefaultCollection();
         }
 
         public async Task InitializeAsync()
         {
-            var opts = GetClusterOptions().WithLogging(new MemoryLoggerFactory());
+            var opts = GetClusterOptions();
             Cluster = await Couchbase.Cluster.ConnectAsync(
                     _settings.ConnectionString,
                     opts)
@@ -127,38 +134,44 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
             Cluster.Dispose();
         }
 
-        private class MemoryLoggerFactory : ILoggerFactory
+        internal class TestOutputLoggerFactory : ILoggerFactory
         {
-            public void Dispose()
-            {
-            }
+            private readonly ITestOutputHelper _outputHelper;
 
-            public ILogger CreateLogger(string categoryName) => new MemoryLogger(categoryName);
+            public TestOutputLoggerFactory(ITestOutputHelper outputHelper)
+            {
+                _outputHelper = outputHelper;
+            }
 
             public void AddProvider(ILoggerProvider provider)
             {
             }
+
+            public ILogger CreateLogger(string categoryName) => new TestOutputLogger(_outputHelper, categoryName);
+
+            public void Dispose()
+            {
+            }
         }
 
-        private class MemoryLogger : ILogger
+        private class TestOutputLogger : ILogger
         {
+            private readonly ITestOutputHelper _outputHelper;
             private readonly string _categoryName;
 
-            public MemoryLogger(string categoryName)
+            public TestOutputLogger(ITestOutputHelper outputHelper, string categoryName)
             {
+                _outputHelper = outputHelper;
                 _categoryName = categoryName;
             }
 
+            public IDisposable BeginScope<TState>(TState state) => new Moq.Mock<IDisposable>().Object;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
             {
-                ClusterFixture.Logs.AppendLine($"{logLevel}: {_categoryName} [{eventId}] {formatter(state, exception)}");
-            }
-
-            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel;
-
-            public IDisposable BeginScope<TState>(TState state)
-            {
-                return new Moq.Mock<IDisposable>().Object;
+                _outputHelper.WriteLine($"{logLevel}: {_categoryName} [{eventId}] {formatter(state, exception)}");
             }
         }
     }

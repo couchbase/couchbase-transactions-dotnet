@@ -22,29 +22,6 @@ namespace Couchbase.Transactions.DataModel
         [JsonProperty("coll")]
         public string? CollectionName { get; set; }
 
-        public async Task<ICouchbaseCollection?> GetAtrCollection(ICouchbaseCollection anyCollection)
-        {
-            if (BucketName == null || CollectionName == null)
-            {
-                return null;
-            }
-
-            _ = anyCollection?.Scope?.Bucket?.Name ??
-                throw new ArgumentOutOfRangeException(nameof(anyCollection), "Collection was not populated.");
-
-            if (anyCollection.Scope.Name == ScopeName
-                && anyCollection.Scope.Bucket.Name == BucketName
-                && anyCollection.Name == CollectionName)
-            {
-                return anyCollection;
-            }
-
-            var bkt = await anyCollection.Scope.Bucket.Cluster.BucketAsync(BucketName).CAF();
-            var scp = ScopeName != null ? bkt.Scope(ScopeName) : bkt.DefaultScope();
-
-            return scp.Collection(CollectionName);
-        }
-
         public override string ToString() => $"{BucketName ?? "-"}/{ScopeName ?? "-"}/{CollectionName ?? "-"}/{Id ?? "-"}";
     }
 }

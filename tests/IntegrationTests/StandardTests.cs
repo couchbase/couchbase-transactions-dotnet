@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Couchbase.Transactions.Config;
+using Couchbase.Transactions.DataAccess;
 using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Internal.Test;
@@ -35,8 +36,8 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         [Fact]
         public async Task getDocFailsRepeatedly()
         {
-            (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture);
-            var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+            (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
+            var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
 
             int attempts = 0;
@@ -86,8 +87,8 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                DocValidator.assertRemovedDocIsStaged(collection,docId);
                }
              */
-            (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture);
-            var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+            (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
+            var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
             await using var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
             txn.TestHooks = new DelegateTestHooks()
             {
@@ -108,14 +109,13 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     await runTask;
                 });
 
-                var docLookup = await DocumentLookupResult.LookupDocumentAsync(defaultCollection, docId, null, true);
+                var docLookup = await DocumentRepository.LookupDocumentAsync(defaultCollection, docId, null, true);
                 Assert.NotNull(docLookup?.TransactionXattrs?.RestoreMetadata);
                 Assert.Equal("remove", docLookup?.TransactionXattrs?.Operation?.Type);
                 Assert.Null(docLookup?.TransactionXattrs?.Operation?.StagedDocument);
             }
             finally
             {
-                _fixture.DumpLogs(_outputHelper);
             }
         }
 
@@ -136,39 +136,32 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                DocValidator.assertReplacedDocIsStagedAndContentEquals(collection,docId,initial);
                }
             */
-            (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture);
-            var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+            (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
+            var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
             await using var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
             txn.TestHooks = new DelegateTestHooks()
             {
                 BeforeAtrCommitImpl = (ctx) => throw ErrorClass.FailHard.Throwable()
             };
 
-            try
+            var runTask = txn.RunAsync(async ctx =>
             {
-                var runTask = txn.RunAsync(async ctx =>
-                {
-                    var getResult = await ctx.GetAsync(defaultCollection, docId);
-                    Assert.NotNull(getResult);
-                    var jobj = getResult.ContentAs<JObject>();
-                    jobj["newfield"] = "newval";
-                    await ctx.ReplaceAsync(getResult!, jobj);
-                });
+                var getResult = await ctx.GetAsync(defaultCollection, docId);
+                Assert.NotNull(getResult);
+                var jobj = getResult.ContentAs<JObject>();
+                jobj["newfield"] = "newval";
+                await ctx.ReplaceAsync(getResult!, jobj);
+            });
 
-                var err = await Assert.ThrowsAsync<TransactionFailedException>(async () =>
-                {
-                    await runTask;
-                });
-
-                var docLookup = await DocumentLookupResult.LookupDocumentAsync(defaultCollection, docId, null, true);
-                Assert.NotNull(docLookup?.TransactionXattrs?.RestoreMetadata);
-                Assert.Equal("replace", docLookup?.TransactionXattrs?.Operation?.Type);
-                Assert.NotNull(docLookup?.TransactionXattrs?.Operation?.StagedDocument);
-            }
-            finally
+            var err = await Assert.ThrowsAsync<TransactionFailedException>(async () =>
             {
-                _fixture.DumpLogs(_outputHelper);
-            }
+                await runTask;
+            });
+
+            var docLookup = await DocumentRepository.LookupDocumentAsync(defaultCollection, docId, null, true);
+            Assert.NotNull(docLookup?.TransactionXattrs?.RestoreMetadata);
+            Assert.Equal("replace", docLookup?.TransactionXattrs?.Operation?.Type);
+            Assert.NotNull(docLookup?.TransactionXattrs?.Operation?.StagedDocument);
         }
 
         [Fact]
@@ -186,8 +179,8 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
 
                DocValidator.assertInsertedDocIsStaged(shared, collection,docId);
              */
-            (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture);
-            var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId + "_testDurability", sampleDoc);
+            (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
+            var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId + "_testDurability", sampleDoc);
             await using var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
             txn.TestHooks = new DelegateTestHooks()
             {
@@ -195,28 +188,21 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             };
 
 
-            try
+            var runTask = txn.RunAsync(async ctx =>
             {
-                var runTask = txn.RunAsync(async ctx =>
-                {
-                    var insertResult = await ctx.InsertAsync(defaultCollection, docId, sampleDoc);
-                });
+                var insertResult = await ctx.InsertAsync(defaultCollection, docId, sampleDoc);
+            });
 
-                var err = await Assert.ThrowsAsync<TransactionFailedException>(async () =>
-                {
-                    await runTask;
-                });
-
-                var docLookup = await DocumentLookupResult.LookupDocumentAsync(defaultCollection, docId, null, fullDocument: false);
-                Assert.True(docLookup.IsDeleted);
-                Assert.Equal("insert", docLookup?.TransactionXattrs?.Operation?.Type);
-                Assert.Null(docLookup?.TransactionXattrs?.RestoreMetadata);
-                Assert.NotNull(docLookup?.TransactionXattrs?.Operation?.StagedDocument);
-            }
-            finally
+            var err = await Assert.ThrowsAsync<TransactionFailedException>(async () =>
             {
-                _fixture.DumpLogs(_outputHelper);
-            }
+                await runTask;
+            });
+
+            var docLookup = await DocumentRepository.LookupDocumentAsync(defaultCollection, docId, null, fullDocument: false);
+            Assert.True(docLookup.IsDeleted);
+            Assert.Equal("insert", docLookup?.TransactionXattrs?.Operation?.Type);
+            Assert.Null(docLookup?.TransactionXattrs?.RestoreMetadata);
+            Assert.NotNull(docLookup?.TransactionXattrs?.Operation?.StagedDocument);
         }
     }
 }

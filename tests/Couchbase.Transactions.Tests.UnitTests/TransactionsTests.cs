@@ -8,7 +8,10 @@ using System.Threading.Tasks;
 using Couchbase.Core.Exceptions.KeyValue;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Config;
+using Couchbase.Transactions.DataAccess;
 using Couchbase.Transactions.Error;
+using Couchbase.Transactions.Error.External;
+using Couchbase.Transactions.Internal;
 using Couchbase.Transactions.Tests.UnitTests.Mocks;
 using Moq;
 using Newtonsoft.Json;
@@ -37,6 +40,54 @@ namespace Couchbase.Transactions.Tests.UnitTests
             catch (Exception e)
             {
                 _outputHelper.WriteLine($"{nameof(Canonical_Example_Compiles)}: Unhandled Exception: {e.ToString()}");
+            }
+        }
+
+        [Fact]
+        public async Task DataAccess_Is_Abstracted()
+        {
+            // After the data access was refactored into repository classes, the ICouchbaseCollection instances passed in shouldn't actually be accessed.
+            // We verify this by using Mock with strict behavior and NotImplemented members.
+            // The test should run to the end without hitting any of the ICouchbaseCollection other than the names.
+            using var cluster = CreateTestCluster(Enumerable.Empty<TransactionGetResult>());
+            var mockCollection = new MockCollectionWithNames(nameof(DataAccess_Is_Abstracted) + "col", nameof(DataAccess_Is_Abstracted) + "scp", nameof(DataAccess_Is_Abstracted) + "bkt");
+            var atr = new MockAtrRepository();
+            var doc = new MockDocumentRepository();
+            string docId = nameof(DataAccess_Is_Abstracted) + ".id";
+            var mockLookupInResult = new Mock<ILookupInResult>(MockBehavior.Strict);
+            mockLookupInResult.SetupGet(l => l.IsDeleted).Returns(false);
+            mockLookupInResult.SetupGet(l => l.Cas).Returns(5);
+            doc.Add(mockCollection, docId, new DataModel.DocumentLookupResult(docId, new JObjectContentWrapper(new { foo = "original" }), null, mockLookupInResult.Object, new Components.DocumentMetadata(), mockCollection));
+            var configBuilder = TransactionConfigBuilder.Create().DurabilityLevel(DurabilityLevel.Majority);
+            try
+            {
+                await using var transactions = Transactions.Create(cluster);
+                transactions.DocumentRepository = doc;
+                transactions.AtrRepository = atr;
+                var tr = await transactions.RunAsync(async ctx =>
+                {
+                    var fetched = await ctx.GetAsync(mockCollection, docId);
+                    var replaced = await ctx.ReplaceAsync(fetched, new { foo = "bar" });
+                    await ctx.RemoveAsync(replaced);
+                    var inserted = await ctx.InsertAsync(mockCollection, docId + "inserted", new { foo = "inserted in transaction" });
+                });
+
+                try
+                {
+                    var aborted = await transactions.RunAsync(async ctx =>
+                    {
+                        var inserted = await ctx.InsertAsync(mockCollection, docId + "inserted_to_rollback", new { foo = "to be thrown" });
+                        throw new InvalidOperationException("force fail");
+                    });
+                }
+                catch (TransactionFailedException)
+                {
+                }
+            }
+            catch (Exception ex)
+            {
+                _outputHelper.WriteLine(ex.ToString());
+                throw;
             }
         }
 

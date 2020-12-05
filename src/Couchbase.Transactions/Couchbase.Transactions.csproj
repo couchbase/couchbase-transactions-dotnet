@@ -42,7 +42,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="CouchbaseNetClient" Version="3.0.7" />
+    <PackageReference Include="CouchbaseNetClient" Version="3.1.*" />
     <PackageReference Include="Crc32.NET" Version="1.2.0" />
     <PackageReference Include="Polly" Version="7.1.0" />
   </ItemGroup>

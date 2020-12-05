@@ -8,6 +8,7 @@ using Couchbase.Core.Exceptions.KeyValue;
 using Couchbase.Core.Retry;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Config;
+using Couchbase.Transactions.DataAccess;
 using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Error.External;
@@ -42,12 +43,12 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         [Fact]
         public async Task Basic_Insert_Should_Succeed()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new { type = nameof(Basic_Insert_Should_Succeed), foo = "bar", revision = 100 };
             var docId = nameof(Basic_Insert_Should_Succeed) + Guid.NewGuid().ToString();
             try
             {
-                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId + "_testDurability", sampleDoc);
+                var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId + "_testDurability", sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -75,6 +76,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     await defaultCollection.LookupInAsync(docId, spec => spec.Get("txn", isXattr: true));
                 Assert.False(postTxnLookupInResult.Exists(0));
             }
+            catch
+            {
+                throw;
+            }
             finally
             {
                 try
@@ -86,23 +91,18 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
                     throw;
                 }
-                finally
-                {
-                    _outputHelper.WriteLine("\n\n==== CB Logs ====");
-                    _fixture.DumpLogs(_outputHelper);
-                }
             }
         }
 
         [Fact]
         public async Task Basic_Replace_Should_Succeed()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new {type = nameof(Basic_Replace_Should_Succeed), foo = "bar", revision = 100 };
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -139,22 +139,18 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
                     throw;
                 }
-                finally
-                {
-                    _fixture.DumpLogs(_outputHelper);
-                }
             }
         }
 
         [Fact]
         public async Task Two_Replaces_Same_Document()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new { type = nameof(Basic_Replace_Should_Succeed), foo = "bar", revision = 100 };
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
                 var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
 
                 var result = await txn.RunAsync(async ctx =>
@@ -194,10 +190,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
                     throw;
                 }
-                finally
-                {
-                    _fixture.DumpLogs(_outputHelper);
-                }
             }
         }
 
@@ -206,12 +198,12 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         public async Task Basic_Remove_Should_Succeed()
         {
             bool removed = false;
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new { type = nameof(Basic_Remove_Should_Succeed), foo = "bar", revision = 100 };
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -254,12 +246,12 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         [Fact]
         public async Task Basic_Rollback_Should_Result_In_No_Changes()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new { type = nameof(Basic_Rollback_Should_Result_In_No_Changes), foo = "bar", revision = 100 };
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -301,7 +293,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         [Fact]
         public async Task Rollback_Insert_Should_Result_In_No_Document()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new { type = nameof(Rollback_Insert_Should_Result_In_No_Document), foo = "bar", revision = 100 };
             var docId = Guid.NewGuid().ToString();
             var durability = DurabilityLevel.None;
@@ -330,12 +322,12 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         [Fact]
         public async Task Exception_Rollback_Should_Result_In_No_Changes()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new { type = nameof(Exception_Rollback_Should_Result_In_No_Changes), foo = "bar", revision = 100 };
             var docId = Guid.NewGuid().ToString();
             try
             {
-                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
 
                 var txn = Transactions.Create(_fixture.Cluster);
                 var configBuilder = TransactionConfigBuilder.Create();
@@ -377,7 +369,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         [Fact]
         public async Task Retry_On_Certain_Failures()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new { type = nameof(Retry_On_Certain_Failures), foo = "bar", revision = 100 };
             var docId = Guid.NewGuid().ToString();
             try
@@ -439,10 +431,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
                     throw;
                 }
-                finally
-                {
-                    _fixture.DumpLogs(_outputHelper);
-                }
             }
         }
         private class TestRetryException : Exception, IRetryable
@@ -456,7 +444,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         [Fact]
         public async Task Get_Repeated_Failures_Should_Throw_TransactionFailed()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var docId = Guid.NewGuid().ToString();
 
             var txn = Transactions.Create(_fixture.Cluster);
@@ -485,7 +473,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         [Fact]
         public async Task Get_NotFound_Throws_DocumentNotFound()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var docId = Guid.NewGuid().ToString();
 
             var txn = Transactions.Create(_fixture.Cluster);
@@ -506,80 +494,75 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         [Fact]
         public async Task DocumentLookup_Should_Include_Metadata()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new { type = nameof(DocumentLookup_Should_Include_Metadata), foo = "bar", revision = 100 };
             var docId = Guid.NewGuid().ToString();
-            try
+
+            var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
+
+            var configBuilder = TransactionConfigBuilder.Create();
+            configBuilder.DurabilityLevel(durability);
+            if (Debugger.IsAttached)
             {
-                var durability = await TestUtil.InsertAndDetermineDurability(defaultCollection, docId, sampleDoc);
+                configBuilder.ExpirationTime(TimeSpan.FromMinutes(10));
+            }
 
-                var configBuilder = TransactionConfigBuilder.Create();
-                configBuilder.DurabilityLevel(durability);
-                if (Debugger.IsAttached)
+            var txn = Transactions.Create(_fixture.Cluster, configBuilder);
+
+
+            txn.TestHooks = new DelegateTestHooks()
+            {
+                BeforeDocCommittedImpl = async (ctx, id) =>
                 {
-                    configBuilder.ExpirationTime(TimeSpan.FromMinutes(10));
-                }
-
-                var txn = Transactions.Create(_fixture.Cluster, configBuilder);
-
-
-                txn.TestHooks = new DelegateTestHooks()
-                {
-                    BeforeDocCommittedImpl = async (ctx, id) =>
-                    {
-                        var documentLookupResult =
-                            await DocumentLookupResult.LookupDocumentAsync(defaultCollection, id, null, true);
-
-                        ////Assert.NotNull(documentLookupResult.DocumentAs<JObject>());
-                        ////Assert.NotNull(documentLookupResult?.TransactionXattrs);
-                        ////_outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
-
-                        return 0;
-                    },
-
-                    AfterStagedReplaceCompleteImpl = async (ctx, id) =>
-                    {
-                        var documentLookupResult =
-                            await DocumentLookupResult.LookupDocumentAsync(defaultCollection, id, null, true);
-
-                        ////Assert.NotNull(documentLookupResult.DocumentAs<JObject>());
-                        ////Assert.NotNull(documentLookupResult?.TransactionXattrs);
-                        ////_outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
-
-                        return 0;
-                    }
-                };
-
-                var result = await txn.RunAsync(async ctx =>
-                {
-                    var getResult = await ctx.GetAsync(defaultCollection, docId);
-                    var docGet = getResult!.ContentAs<dynamic>();
-
-                    docGet.revision = docGet.revision + 1;
-                    var replaceResult = await ctx.ReplaceAsync(getResult, docGet);
-
                     var documentLookupResult =
-                        await DocumentLookupResult.LookupDocumentAsync(defaultCollection, docId, null, true);
+                        await DocumentRepository.LookupDocumentAsync(defaultCollection, id, null, true);
 
-                    Assert.NotNull(documentLookupResult?.TransactionXattrs);
-                    Assert.NotNull(documentLookupResult?.StagedContent?.ContentAs<object>());
-                    _outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
-                });
+                    ////Assert.NotNull(documentLookupResult.DocumentAs<JObject>());
+                    ////Assert.NotNull(documentLookupResult?.TransactionXattrs);
+                    ////_outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
 
-                Assert.NotEmpty(result.Attempts);
-                _outputHelper.WriteLine(string.Join(",", result.Attempts));
-                ////await txn.DisposeAsync();
-            }
-            finally
+                    return 0;
+                },
+
+                AfterStagedReplaceCompleteImpl = async (ctx, id) =>
+                {
+                    var documentLookupResult =
+                        await DocumentRepository.LookupDocumentAsync(defaultCollection, id, null, true);
+
+                    ////Assert.NotNull(documentLookupResult.DocumentAs<JObject>());
+                    ////Assert.NotNull(documentLookupResult?.TransactionXattrs);
+                    ////_outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
+
+                    return 0;
+                }
+            };
+
+            var result = await txn.RunAsync(async ctx =>
             {
-                _fixture.DumpLogs(_outputHelper);
-            }
+                var getResult = await ctx.GetAsync(defaultCollection, docId);
+                var docGet = getResult!.ContentAs<dynamic>();
+
+                docGet.revision = docGet.revision + 1;
+                var replaceResult = await ctx.ReplaceAsync(getResult, docGet);
+
+                var documentLookupResult =
+                    await DocumentRepository.LookupDocumentAsync(defaultCollection, docId, null, true);
+
+                Assert.NotNull(documentLookupResult?.TransactionXattrs);
+                Assert.NotNull(documentLookupResult?.StagedContent?.ContentAs<object>());
+                _outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
+            });
+
+            Assert.NotEmpty(result.Attempts);
+            _outputHelper.WriteLine(string.Join(",", result.Attempts));
+            ////await txn.DisposeAsync();
+
         }
 
         [Fact]
         public async Task DocumentLookup_Basic()
         {
-            var defaultCollection = await _fixture.GetDefaultCollection();
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new { type = nameof(DocumentLookup_Basic), foo = "bar", revision = 100, sub = new { a = 1, b = 2 } };
             var docId = Guid.NewGuid().ToString();
             var insertResult =
@@ -593,7 +576,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                         .Durability(DurabilityLevel.None)
                         .StoreSemantics(StoreSemantics.Replace));
 
-            var docLookup = await DocumentLookupResult.LookupDocumentAsync(defaultCollection, docId, null, true);
+            var docLookup = await DocumentRepository.LookupDocumentAsync(defaultCollection, docId, null, true);
             Assert.NotNull(docLookup.TransactionXattrs);
         }
     }

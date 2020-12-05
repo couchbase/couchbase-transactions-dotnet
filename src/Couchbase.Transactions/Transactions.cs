@@ -12,6 +12,7 @@ using Couchbase.Core.Logging;
 using Couchbase.Core.Retry;
 using Couchbase.Transactions.Cleanup;
 using Couchbase.Transactions.Config;
+using Couchbase.Transactions.DataAccess;
 using Couchbase.Transactions.Deferred;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Error.External;
@@ -43,6 +44,8 @@ namespace Couchbase.Transactions
         internal ICluster Cluster => _cluster;
 
         internal ITestHooks TestHooks { get; set; } = DefaultTestHooks.Instance;
+        internal IDocumentRepository? DocumentRepository { get; set; } = null;
+        internal IAtrRepository? AtrRepository { get; set; } = null;
 
         internal ICleanupTestHooks CleanupTestHooks
         {
@@ -61,8 +64,9 @@ namespace Couchbase.Transactions
                 Interlocked.Increment(ref InstancesCreatedDoingBackgroundCleanup);
             }
 
-            loggerFactory = _cluster.ClusterServices?.GetService(typeof(ILoggerFactory)) as ILoggerFactory ??
-                            NullLoggerFactory.Instance;
+            loggerFactory = config.LoggerFactory
+                ?? _cluster.ClusterServices?.GetService(typeof(ILoggerFactory)) as ILoggerFactory
+                ?? NullLoggerFactory.Instance;
            ////_cleanupWorkQueue = new CleanupWorkQueue(_cluster, Config.KeyValueTimeout, _typeTranscoder);
            _cleaner = new Cleaner(cluster, Config.KeyValueTimeout);
 
@@ -74,6 +78,7 @@ namespace Couchbase.Transactions
 
         public static Transactions Create(ICluster cluster, TransactionConfigBuilder configBuilder) =>
             Create(cluster, configBuilder.Build());
+
 
         public Task<TransactionResult> RunAsync(Func<AttemptContext, Task> transactionLogic) =>
             RunAsync(transactionLogic, PerTransactionConfigBuilder.Create().Build());
@@ -165,10 +170,11 @@ namespace Couchbase.Transactions
                 overallContext,
                 Config,
                 Guid.NewGuid().ToString(),
-                this,
                 TestHooks,
                 _redactor,
-                loggerFactory
+                loggerFactory,
+                DocumentRepository,
+                AtrRepository
             );
 
             try
@@ -229,7 +235,7 @@ namespace Couchbase.Transactions
                     //  Add a TransactionAttempt that will be returned in the final TransactionResult.
                     //  AddCleanupRequest, if the cleanup thread is configured to be running.
                     var errAttempt = ctx.ToAttempt();
-                    errAttempt.TermindatedByException = ex;
+                    errAttempt.TerminatedByException = ex;
                     errAttempt.TimeTaken = attemptWatch.Elapsed;
                     attempts.Add(errAttempt);
                 }

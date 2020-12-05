@@ -8,12 +8,13 @@ using Couchbase.Core.Exceptions.KeyValue;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.Tests.IntegrationTests.Fixtures;
+using Xunit.Abstractions;
 
 namespace Couchbase.Transactions.Tests.IntegrationTests
 {
     internal static class TestUtil
     {
-        public static async Task<DurabilityLevel> InsertAndDetermineDurability(ICouchbaseCollection defaultCollection, string docId,
+        public static async Task<DurabilityLevel> InsertAndVerifyDurability(ICouchbaseCollection defaultCollection, string docId,
             object sampleDoc)
         {
             var durability = DurabilityLevel.Majority;
@@ -22,19 +23,17 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             {
                 _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability).Expiry(TimeSpan.FromMinutes(10)));
             }
-            catch (DurabilityImpossibleException)
+            catch (DurabilityImpossibleException ex)
             {
-                // when running on single-node cluster, such as localhost.
-                durability = DurabilityLevel.None;
-                _ = await defaultCollection.InsertAsync(docId, sampleDoc, opts => opts.Durability(durability).Expiry(TimeSpan.FromMinutes(10)));
+                throw new InvalidOperationException("Bucket must support Durability.Majority, at least.", ex);
             }
 
             return durability;
         }
 
-        public static async Task<(ICouchbaseCollection collection, string docId, object sampleDoc)> PrepSampleDoc(ClusterFixture fixture, [CallerMemberName]string testName = nameof(PrepSampleDoc))
+        public static async Task<(ICouchbaseCollection collection, string docId, object sampleDoc)> PrepSampleDoc(ClusterFixture fixture, ITestOutputHelper outputHelper, [CallerMemberName]string testName = nameof(PrepSampleDoc))
         {
-            var defaultCollection = await fixture.GetDefaultCollection();
+            var defaultCollection = await fixture.OpenDefaultCollection(outputHelper);
             var docId = Guid.NewGuid().ToString();
             var sampleDoc = new { type = nameof(testName), foo = "bar", revision = 100 };
             return (defaultCollection, docId, sampleDoc);

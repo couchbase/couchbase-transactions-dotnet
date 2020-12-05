@@ -15,6 +15,26 @@ namespace Couchbase.Transactions.Internal.Test
     /// <remarks>All methods have default no-op implementations.</remarks>
     internal interface ITestHooks
     {
+        public const string HOOK_ROLLBACK = "rollback";
+        public const string HOOK_GET = "get";
+        public const string HOOK_INSERT = "insert";
+        public const string HOOK_REPLACE = "replace";
+        public const string HOOK_REMOVE = "remove";
+        public const string HOOK_BEFORE_COMMIT = "commit";
+        public const string HOOK_ABORT_GET_ATR = "abortGetAtr";
+        public const string HOOK_ROLLBACK_DOC = "rollbackDoc";
+        public const string HOOK_DELETE_INSERTED = "deleteInserted";
+        public const string HOOK_CREATE_STAGED_INSERT = "createdStagedInsert";
+        public const string HOOK_INSERT_QUERY = "insertQuery";
+        public const string HOOK_REMOVE_DOC = "removeDoc";
+        public const string HOOK_COMMIT_DOC = "commitDoc";
+        public const string HOOK_QUERY = "query";
+        public const string HOOK_ATR_COMMIT = "atrCommit";
+        public const string HOOK_ATR_COMMIT_AMBIGUITY_RESOLUTION = "atrCommitAmbiguityResolution";
+        public const string HOOK_ATR_ABORT = "atrAbort";
+        public const string HOOK_ATR_ROLLBACK_COMPLETE = "atrRollbackComplete";
+        public const string HOOK_ATR_PENDING = "atrPending";
+        public const string HOOK_ATR_COMPLETE = "atrComplete";
         Task<int?> BeforeAtrCommit(AttemptContext self) => Task.FromResult<int?>(0);
 
         Task<int?> AfterAtrCommit(AttemptContext self) => Task.FromResult<int?>(0);
@@ -83,7 +103,7 @@ namespace Couchbase.Transactions.Internal.Test
 
         Task<int?> BeforeGetDocInExistsDuringStagedInsert(AttemptContext self, string id) => Task.FromResult<int?>(0);
 
-        Task<bool> HasExpiredClientSideHook(AttemptContext self, string place, [AllowNull] string docId) => Task.FromResult(false);
+        bool HasExpiredClientSideHook(AttemptContext self, string place, [AllowNull] string docId) => false;
         Task<int?> BeforeAtrCommitAmbiguityResolution(AttemptContext attemptContext) => Task.FromResult<int?>(0);
     }
 

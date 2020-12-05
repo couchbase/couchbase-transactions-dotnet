@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Couchbase.Core.IO.Transcoders;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Components;
+using Couchbase.Transactions.DataAccess;
 using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Internal.Test;
@@ -132,7 +133,6 @@ namespace Couchbase.Transactions.Cleanup
                     {
                         await TestHooks.BeforeRemoveLinks(dr.Id).CAF();
                         var collection = await dr.GetCollection(_cluster).CAF();
-                        var finalDoc = op.StagedContent!.ContentAs<object>();
                         await collection.MutateInAsync(dr.Id, specs =>
                                 specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true),
                             opts => opts.Cas(op.Cas)
@@ -160,11 +160,11 @@ namespace Couchbase.Transactions.Cleanup
                         }
                         else
                         {
-                            // TODO: spec says, "set accessDeleted flag". Is that a typo and they mean CreateAsDeleted?
                             await collection.MutateInAsync(dr.Id, specs =>
                                     specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
                                         .SetDoc(finalDoc)
                                 , opts => opts.Cas(op.Cas)
+                                    .AccessDeleted(true)
                                     .CreateAsDeleted(true)
                                     .Timeout(_keyValueTimeout)).CAF();
                         }
@@ -178,6 +178,7 @@ namespace Couchbase.Transactions.Cleanup
                     {
                         await TestHooks.BeforeRemoveDocStagedForRemoval(dr.Id).CAF();
                         var collection = await dr.GetCollection(_cluster).CAF();
+
                         await collection.RemoveAsync(dr.Id, opts => opts.Cas(op.Cas)
                             .Timeout(_keyValueTimeout)).CAF();
                     }).CAF();
@@ -190,8 +191,7 @@ namespace Couchbase.Transactions.Cleanup
             {
                 await TestHooks.BeforeDocGet(dr.Id).CAF();
                 var collection = await dr.GetCollection(_cluster).CAF();
-                var docLookupResult = await DocumentLookupResult
-                    .LookupDocumentAsync(collection, dr.Id, _keyValueTimeout, fullDocument: false).CAF();
+                var docLookupResult = await DocumentRepository.LookupDocumentAsync(collection, dr.Id, _keyValueTimeout, fullDocument: false).CAF();
 
                 if (docLookupResult.TransactionXattrs == null)
                 {

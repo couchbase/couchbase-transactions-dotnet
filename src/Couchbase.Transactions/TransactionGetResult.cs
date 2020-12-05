@@ -18,10 +18,10 @@ namespace Couchbase.Transactions
         public static readonly TransactionGetResult? Empty = null;
 
         private TransactionGetResult(
-            [NotNull] string id,
-            [NotNull] IContentAsWrapper content,
+            string id,
+            IContentAsWrapper content,
             ulong cas,
-            [NotNull] ICouchbaseCollection collection,
+            ICouchbaseCollection collection,
             TransactionXattrs? transactionXattrs,
             TransactionJsonDocumentStatus status,
             DocumentMetadata? documentMetadata)
@@ -60,7 +60,7 @@ namespace Couchbase.Transactions
             string atrBucketName,
             string atrScopeName,
             string atrCollectionName,
-            IMutateInResult updatedDoc
+            ulong updatedCas
             )
         {
             var txn = new TransactionXattrs();
@@ -81,7 +81,7 @@ namespace Couchbase.Transactions
             return new TransactionGetResult(
                 id,
                 content,
-                updatedDoc.Cas,
+                updatedCas,
                 collection,
                 txn,
                 TransactionJsonDocumentStatus.Normal,

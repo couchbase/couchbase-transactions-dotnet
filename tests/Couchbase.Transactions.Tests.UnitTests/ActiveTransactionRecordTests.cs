@@ -37,14 +37,14 @@ namespace Couchbase.Transactions.Tests.UnitTests
         public void Atr_Parse()
         {
             var json = ResourceHelper.ReadResource(@"Data\atr_from_spec.json");
-            var atr = JsonConvert.DeserializeObject<ActiveTransactionRecord>(json);
+            var atr = JsonConvert.DeserializeObject<AtrEntry>(json);
         }
 
         [Theory]
         [InlineData("0x000058a71dd25c15", 0x155CD21DA7580000 / 1000000L)]
         public void Parse_Mutation_Cas_Field(string cas, long expected)
         {
-            var parsed = ActiveTransactionRecord.ParseMutationCasField(cas);
+            var parsed = AtrEntry.ParseMutationCasField(cas);
             Assert.NotNull(parsed);
             Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(expected), parsed);
         }
