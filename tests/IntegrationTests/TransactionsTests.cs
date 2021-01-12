@@ -43,6 +43,9 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         [Fact]
         public async Task Basic_Insert_Should_Succeed()
         {
+            // Use a feature from an unreleased CouchbaseNetClient to guarantee we're using latest from master instead.
+            var ex = new Core.Exceptions.CasMismatchException();
+
             var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
             var sampleDoc = new { type = nameof(Basic_Insert_Should_Succeed), foo = "bar", revision = 100 };
             var docId = nameof(Basic_Insert_Should_Succeed) + Guid.NewGuid().ToString();
