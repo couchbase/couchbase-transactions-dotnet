@@ -38,7 +38,7 @@ namespace Couchbase.Transactions.DataAccess
 
         Task MutateAtrRolledBack();
 
-        Task<AtrEntry?> FindEntryForTransaction(ICouchbaseCollection atrCollection, string atrId);
+        Task<AtrEntry?> FindEntryForTransaction(ICouchbaseCollection atrCollection, string atrId, string? attemptId = null);
 
     }
 }

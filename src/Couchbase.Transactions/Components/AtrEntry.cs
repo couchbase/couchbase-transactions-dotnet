@@ -70,7 +70,7 @@ namespace Couchbase.Transactions.Components
                     return null;
                 }
 
-                return (TimestampStartMsecs.Value.AddMilliseconds(ExpiresAfterMsecs.Value) > DateTime.UtcNow);
+                return (TimestampStartMsecs.Value.AddMilliseconds(ExpiresAfterMsecs.Value) < DateTimeOffset.UtcNow);
             }
         }
 

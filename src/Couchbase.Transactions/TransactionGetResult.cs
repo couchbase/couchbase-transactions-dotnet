@@ -19,22 +19,26 @@ namespace Couchbase.Transactions
 
         private TransactionGetResult(
             string id,
-            IContentAsWrapper content,
+            IContentAsWrapper? content,
             ulong cas,
             ICouchbaseCollection collection,
             TransactionXattrs? transactionXattrs,
             TransactionJsonDocumentStatus status,
-            DocumentMetadata? documentMetadata)
+            DocumentMetadata? documentMetadata,
+            bool isTombstone)
         {
             Id = id;
             FullyQualifiedId = GetFullyQualifiedId(collection, id);
-            _content = content;
+            _content = content ?? new JObjectContentWrapper(new { });
             Cas = cas;
             Collection = collection;
             TransactionXattrs = transactionXattrs;
             Status = status;
             DocumentMetadata = documentMetadata;
+            IsDeleted = isTombstone;
         }
+
+        internal bool IsDeleted { get; }
 
         internal TransactionJsonDocumentStatus Status { get; }
         internal TransactionXattrs? TransactionXattrs { get; }
@@ -60,7 +64,8 @@ namespace Couchbase.Transactions
             string atrBucketName,
             string atrScopeName,
             string atrCollectionName,
-            ulong updatedCas
+            ulong updatedCas,
+            bool isDeleted
             )
         {
             var txn = new TransactionXattrs();
@@ -85,7 +90,8 @@ namespace Couchbase.Transactions
                 collection,
                 txn,
                 TransactionJsonDocumentStatus.Normal,
-                null
+                null,
+                isDeleted
             );
         }
 
@@ -103,24 +109,26 @@ namespace Couchbase.Transactions
                 doc.Collection,
                 doc.TransactionXattrs,
                 status,
-                doc.DocumentMetadata
+                doc.DocumentMetadata,
+                doc.IsDeleted
                 );
         }
 
-        internal static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection collection, string id, IContentAsWrapper content, ulong cas, DocumentMetadata documentMetadata)
+        internal static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection collection, string id, IContentAsWrapper content, ulong cas, DocumentMetadata documentMetadata, bool isDeleted, TransactionXattrs? transactionXattrs)
         {
             return new TransactionGetResult(
                 id: id,
                 content: content,
                 cas: cas,
                 collection: collection,
-                transactionXattrs: null,
+                transactionXattrs: transactionXattrs,
                 status: TransactionJsonDocumentStatus.Normal,
-                documentMetadata: documentMetadata
+                documentMetadata: documentMetadata,
+                isTombstone: isDeleted
             );
         }
 
-        internal static TransactionGetResult FromStaged(ICouchbaseCollection collection, string id, IContentAsWrapper stagedContent, ulong cas, DocumentMetadata documentMetadata, TransactionJsonDocumentStatus status, TransactionXattrs? txn)
+        internal static TransactionGetResult FromStaged(ICouchbaseCollection collection, string id, IContentAsWrapper? stagedContent, ulong cas, DocumentMetadata documentMetadata, TransactionJsonDocumentStatus status, TransactionXattrs? txn, bool isTombstone)
         {
             return new TransactionGetResult(
                 id,
@@ -129,7 +137,8 @@ namespace Couchbase.Transactions
                 collection,
                 txn,
                 status,
-                documentMetadata
+                documentMetadata,
+                isTombstone
                 );
         }
     }

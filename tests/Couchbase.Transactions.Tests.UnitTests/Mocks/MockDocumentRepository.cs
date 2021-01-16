@@ -24,7 +24,7 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
         // intentionally *not* the scheme CB server actually uses, because we want it to break if the code is using "_default._default" as a collection name
         // rather than splitting it up properly among Collection/Scope/Bucket.
 
-        public Task ClearTransactionMetadata(ICouchbaseCollection collection, string docId, ulong cas)
+        public Task ClearTransactionMetadata(ICouchbaseCollection collection, string docId, ulong cas, bool isDelted)
         {
             if (Docs.TryGetValue(collection.GetKey(docId), out var doc))
             {
@@ -69,7 +69,7 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
             return ((ulong)_rollingCas, new MutationToken("fake", 1, 2, _rollingCas));
         }
 
-        public async Task<(ulong updatedCas, MutationToken mutationToken)> MutateStagedReplace(TransactionGetResult doc, object content, IAtrRepository atr)
+        public async Task<(ulong updatedCas, MutationToken mutationToken)> MutateStagedReplace(TransactionGetResult doc, object content, IAtrRepository atr, bool accessDeleted)
         {
             _ = await LookupDocumentAsync(doc.Collection, doc.Id);
             Interlocked.Increment(ref _rollingCas);

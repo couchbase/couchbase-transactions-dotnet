@@ -29,7 +29,7 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
             Collection = new MockCollectionWithNames(CollectionName, ScopeName, BucketName);
         }
 
-        public Task<AtrEntry> FindEntryForTransaction(ICouchbaseCollection atrCollection, string atrId)
+        public Task<AtrEntry> FindEntryForTransaction(ICouchbaseCollection atrCollection, string atrId, string attemptId)
         {
             if (Atrs.TryGetValue(atrCollection.GetKey(atrId), out var atr))
             {

@@ -48,27 +48,24 @@ namespace Couchbase.Transactions.DataModel
 
         internal ICouchbaseCollection DocumentCollection { get; }
 
-        public TransactionGetResult GetPreTransactionResult()
-        {
-            return TransactionGetResult.FromNonTransactionDoc(
+        public TransactionGetResult GetPreTransactionResult() => TransactionGetResult.FromNonTransactionDoc(
                 collection: DocumentCollection,
                 id: Id,
                 content: UnstagedContent ?? throw new ArgumentNullException(nameof(UnstagedContent)),
                 cas: Cas,
-                documentMetadata: DocumentMetadata);
-        }
+                documentMetadata: DocumentMetadata,
+                isDeleted: IsDeleted,
+                transactionXattrs: TransactionXattrs);
 
-        public TransactionGetResult GetPostTransactionResult(TransactionJsonDocumentStatus txnJsonStatus)
-        {
-            return TransactionGetResult.FromStaged(
+        public TransactionGetResult GetPostTransactionResult(TransactionJsonDocumentStatus txnJsonStatus) => TransactionGetResult.FromStaged(
                 DocumentCollection,
                 Id,
-                StagedContent ?? throw new ArgumentNullException(nameof(StagedContent)),
+                StagedContent,
                 Cas,
                 DocumentMetadata,
                 txnJsonStatus,
-                TransactionXattrs
+                TransactionXattrs,
+                IsDeleted
             );
-        }
     }
 }

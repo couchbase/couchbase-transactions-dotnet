@@ -136,7 +136,14 @@ namespace Couchbase.Transactions.Error.Attempts
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Creating-Staged-Inserts-Protocol-20-version
             var ec = err.Classify();
-            var defaultRetry = err is TransactionOperationFailedException tofe && tofe.RetryTransaction;
+            bool defaultRetry = false;
+            TransactionOperationFailedException.FinalError? finalError = null;
+            if (err is TransactionOperationFailedException tofe)
+            {
+                defaultRetry = tofe.RetryTransaction;
+                finalError = tofe.FinalErrorToRaise;
+            }
+
             ErrorBuilder? toThrow = ec switch
             {
                 FailDocNotFound => Error(ec, err, retry: true),
@@ -144,6 +151,11 @@ namespace Couchbase.Transactions.Error.Attempts
                 FailTransient => Error(ec, err, retry: true),
                 _ => Error(ec, err, defaultRetry)
             };
+
+            if (finalError != null && toThrow != null)
+            {
+                toThrow.RaiseException(finalError.Value);
+            }
 
             return (ec, toThrow?.Build());
         }
@@ -204,7 +216,7 @@ namespace Couchbase.Transactions.Error.Attempts
             var ec = err.Classify();
             ErrorBuilder? toThrow = ec switch
             {
-                FailHard => Error(ec, err, rollback: false),
+                FailHard => Error(ec, err, rollback: false, raise: TransactionOperationFailedException.FinalError.TransactionFailedPostCommit),
                 // Setting the ATR to COMPLETED is purely a cleanup step, there’s no need to retry it until expiry.
                 // Simply return success (leaving state at COMMITTED).
                 _ => null,

@@ -38,12 +38,16 @@ namespace Couchbase.Transactions.DataAccess
             {
                 opts.Cas(cas.Value).StoreSemantics(StoreSemantics.Replace);
             }
+            else
+            {
+                opts.Cas(0);
+            }
 
             var mutateResult = await collection.MutateInAsync(docId, specs, opts).CAF();
             return (mutateResult.Cas, mutateResult.MutationToken);
         }
 
-        public async Task<(ulong updatedCas, MutationToken mutationToken)> MutateStagedReplace(TransactionGetResult doc, object content, IAtrRepository atr)
+        public async Task<(ulong updatedCas, MutationToken mutationToken)> MutateStagedReplace(TransactionGetResult doc, object content, IAtrRepository atr, bool accessDeleted)
         {
             if (doc.Cas == 0)
             {
@@ -52,6 +56,10 @@ namespace Couchbase.Transactions.DataAccess
 
             var specs = CreateMutationOps(atr, "replace", content, doc.DocumentMetadata);
             var opts = GetMutateInOptions(StoreSemantics.Replace).Cas(doc.Cas);
+            if (accessDeleted)
+            {
+                opts.AccessDeleted(true);
+            }
 
             try
             {
@@ -94,7 +102,7 @@ namespace Couchbase.Transactions.DataAccess
                             specs.Upsert(TransactionFields.TransactionInterfacePrefixOnly, string.Empty,
                                     isXattr: true, createPath: true)
                                 .Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
-                                .SetDoc(finalDoc)).CAF();
+                                .SetDoc(finalDoc), opts).CAF();
                 return (mutateResult.Cas, mutateResult?.MutationToken);
             }
         }
@@ -110,9 +118,13 @@ namespace Couchbase.Transactions.DataAccess
             await collection.RemoveAsync(docId, opts).CAF();
         }
 
-        public async Task ClearTransactionMetadata(ICouchbaseCollection collection, string docId, ulong cas)
+        public async Task ClearTransactionMetadata(ICouchbaseCollection collection, string docId, ulong cas, bool isDeleted)
         {
-            var opts = GetMutateInOptions(StoreSemantics.Replace).AccessDeleted(true).Cas(cas);
+            var opts = GetMutateInOptions(StoreSemantics.Replace).Cas(cas);
+            if (isDeleted)
+            {
+                opts.AccessDeleted(true);
+            }
 
             var specs = new MutateInSpec[]
             {
@@ -134,6 +146,12 @@ namespace Couchbase.Transactions.DataAccess
                 LookupInSpec.Get(TransactionFields.StagedData, isXattr: true)
             };
 
+            var opts = new LookupInOptions().AccessDeleted(true).Timeout(keyValueTimeout);
+
+            int? txnIndex = 0;
+            int docMetaIndex = 1;
+            int? stagedDataIndex = 2;
+
             int? fullDocIndex = null;
             if (fullDocument)
             {
@@ -144,34 +162,21 @@ namespace Couchbase.Transactions.DataAccess
             ILookupInResult lookupInResult;
             try
             {
-                lookupInResult = await collection.LookupInAsync(docId, specs, opts =>
-                    opts.AccessDeleted(true).Timeout(keyValueTimeout)).CAF();
+                lookupInResult = await collection.LookupInAsync(docId, specs, opts).CAF();
             }
             catch (PathInvalidException pathInvalid)
             {
-                // TODO:  Possible NCBC fix needed?  LookupIn with AccessDeleted maybe should not be throwing PathInvalid
-                //        i.e. should gracefully handle SUBDOC_MULTI_PATH_FAILURE_DELETED
-                if (fullDocIndex != null)
-                {
-                    specs.RemoveAt(fullDocIndex.Value);
-                    fullDocIndex = null;
-                    lookupInResult = await collection.LookupInAsync(docId, specs, opts =>
-                        opts.AccessDeleted(true).Timeout(keyValueTimeout)).CAF();
-                }
-                else
-                {
-                    throw;
-                }
+                throw;
             }
 
-            var docMeta = lookupInResult.ContentAs<DocumentMetadata>(1);
+            var docMeta = lookupInResult.ContentAs<DocumentMetadata>(docMetaIndex);
 
             IContentAsWrapper? unstagedContent = fullDocIndex.HasValue
                 ? new LookupInContentAsWrapper(lookupInResult, fullDocIndex.Value)
                 : null;
 
-            var stagedContent = lookupInResult.Exists(2)
-                ? new LookupInContentAsWrapper(lookupInResult, 2)
+            var stagedContent = stagedDataIndex.HasValue && lookupInResult.Exists(stagedDataIndex.Value)
+                ? new LookupInContentAsWrapper(lookupInResult, stagedDataIndex.Value)
                 : null;
 
             var result = new DocumentLookupResult(docId,
@@ -181,9 +186,9 @@ namespace Couchbase.Transactions.DataAccess
                 docMeta,
                 collection);
 
-            if (lookupInResult.Exists(0))
+            if (txnIndex.HasValue && lookupInResult.Exists(txnIndex.Value))
             {
-                result.TransactionXattrs = lookupInResult.ContentAs<TransactionXattrs>(0);
+                result.TransactionXattrs = lookupInResult.ContentAs<TransactionXattrs>(txnIndex.Value);
             }
 
             return result;

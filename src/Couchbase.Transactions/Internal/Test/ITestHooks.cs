@@ -21,7 +21,7 @@ namespace Couchbase.Transactions.Internal.Test
         public const string HOOK_REPLACE = "replace";
         public const string HOOK_REMOVE = "remove";
         public const string HOOK_BEFORE_COMMIT = "commit";
-        public const string HOOK_ABORT_GET_ATR = "abortGetAtr";
+        public const string HOOK_ABORT_GET_ATR = "abortGetAtr"; // No references in Java code.
         public const string HOOK_ROLLBACK_DOC = "rollbackDoc";
         public const string HOOK_DELETE_INSERTED = "deleteInserted";
         public const string HOOK_CREATE_STAGED_INSERT = "createdStagedInsert";
@@ -35,6 +35,8 @@ namespace Couchbase.Transactions.Internal.Test
         public const string HOOK_ATR_ROLLBACK_COMPLETE = "atrRollbackComplete";
         public const string HOOK_ATR_PENDING = "atrPending";
         public const string HOOK_ATR_COMPLETE = "atrComplete";
+        public const string HOOK_CHECK_WRITE_WRITE_CONFLICT = "checkATREntryForBlockingDoc";
+
         Task<int?> BeforeAtrCommit(AttemptContext self) => Task.FromResult<int?>(0);
 
         Task<int?> AfterAtrCommit(AttemptContext self) => Task.FromResult<int?>(0);

@@ -34,6 +34,7 @@ namespace Couchbase.Transactions
         private bool _disposedValue;
         private readonly IRedactor _redactor;
         private readonly ILoggerFactory loggerFactory;
+        private readonly ILogger<Transactions> _logger;
         ////private readonly CleanupWorkQueue _cleanupWorkQueue;
         private readonly ConcurrentQueue<CleanupRequest> _cleanupRequests = new ConcurrentQueue<CleanupRequest>();
         private readonly Cleaner _cleaner;
@@ -67,6 +68,7 @@ namespace Couchbase.Transactions
             loggerFactory = config.LoggerFactory
                 ?? _cluster.ClusterServices?.GetService(typeof(ILoggerFactory)) as ILoggerFactory
                 ?? NullLoggerFactory.Instance;
+            _logger = loggerFactory.CreateLogger<Transactions>();
            ////_cleanupWorkQueue = new CleanupWorkQueue(_cluster, Config.KeyValueTimeout, _typeTranscoder);
            _cleaner = new Cleaner(cluster, Config.KeyValueTimeout);
 
@@ -101,12 +103,12 @@ namespace Couchbase.Transactions
             var opRetryBackoffMillisecond = 1;
             var randomJitter = new Random();
 
-            while (!overallContext.IsExpired)
+            while (true)
             {
                 try
                 {
                     await ExecuteApplicationLambda(transactionLogic, overallContext, loggerFactory, attempts).CAF();
-                    break;
+                    return result;
                 }
                 catch (TransactionOperationFailedException ex)
                 {
@@ -158,7 +160,7 @@ namespace Couchbase.Transactions
                 }
             }
 
-            return result;
+            throw new InvalidOperationException("Loop should not have exited without expiration.");
         }
 
         private async Task ExecuteApplicationLambda(Func<AttemptContext, Task> transactionLogic, TransactionContext overallContext, ILoggerFactory? loggerFactory,
@@ -187,7 +189,7 @@ namespace Couchbase.Transactions
                     attempt.TimeTaken = attemptWatch.Elapsed;
                     attempts.Add(attempt);
                 }
-                catch (TransactionOperationFailedException)
+                catch (TransactionOperationFailedException ex)
                 {
                     // already a classified error
                     throw;
@@ -216,17 +218,30 @@ namespace Couchbase.Transactions
                     {
                         try
                         {
+                            _logger.LogWarning("Attempt failed, attempting automatic rollback...");
                             await ctx.RollbackInternal(isAppRollback: false).CAF();
                         }
-                        catch
+                        catch (Exception rollbackEx)
                         {
+                            _logger.LogWarning("Rollback failed due to {reason}", rollbackEx.Message);
                             // if rollback failed, raise the original error, but with retry disabled:
                             // Error(ec = err.ec, cause = err.cause, raise = err.raise
                             throw ErrorBuilder.CreateError(ctx, ex.CausingErrorClass)
                                 .Cause(ex.Cause)
                                 .DoNotRollbackAttempt()
+                                .RaiseException(ex.FinalErrorToRaise)
                                 .Build();
                         }
+                    }
+
+                    // If the transaction has expired, raised Error(ec = FAIL_EXPIRY, rollback=false, raise = TRANSACTION_EXPIRED)
+                    if (overallContext.IsExpired)
+                    {
+                        _logger.LogWarning("Transaction is expired.  No more retries or rollbacks.");
+                        throw ErrorBuilder.CreateError(ctx, ErrorClass.FailExpiry, ex)
+                            .DoNotRollbackAttempt()
+                            .RaiseException(TransactionOperationFailedException.FinalError.TransactionExpired)
+                            .Build();
                     }
                 }
                 finally
@@ -241,6 +256,7 @@ namespace Couchbase.Transactions
                 }
 
                 // Else if it succeeded or no rollback was performed, propagate err up.
+                _logger.LogDebug("Propagating error up. (ec = {ec}, retry = {retry}, finalError = {finalError})", ex.CausingErrorClass, ex.RetryTransaction, ex.FinalErrorToRaise);
                 throw;
             }
             finally

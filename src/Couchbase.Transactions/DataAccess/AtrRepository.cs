@@ -54,8 +54,8 @@ namespace Couchbase.Transactions.DataAccess
             _prefixedAtrFieldTransactionId = $"{prefix}.{TransactionFields.AtrFieldTransactionId}";
         }
 
-        public Task<AtrEntry?> FindEntryForTransaction(ICouchbaseCollection atrCollection, string atrId)
-            => FindEntryForTransaction(atrCollection, atrId, _attemptId, _overallContext?.Config?.KeyValueTimeout);
+        public Task<AtrEntry?> FindEntryForTransaction(ICouchbaseCollection atrCollection, string atrId, string? attemptId = null)
+            => FindEntryForTransaction(atrCollection, atrId, attemptId ?? _attemptId, _overallContext?.Config?.KeyValueTimeout);
 
         public static async Task<AtrEntry?> FindEntryForTransaction(
             ICouchbaseCollection atrCollection,

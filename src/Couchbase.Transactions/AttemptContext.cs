@@ -42,6 +42,7 @@ namespace Couchbase.Transactions
 {
     public class AttemptContext
     {
+        private static readonly TimeSpan WriteWriteConflictTimeLimit = TimeSpan.FromSeconds(1);
         private readonly TransactionContext _overallContext;
         private readonly TransactionConfig _config;
         private readonly ITestHooks _testHooks;
@@ -273,13 +274,12 @@ namespace Couchbase.Transactions
         {
             DoneCheck();
             CheckErrors();
-            CheckExpiryAndThrow(doc.Id);
+            CheckExpiryAndThrow(doc.Id, ITestHooks.HOOK_REPLACE);
             await CheckWriteWriteConflict(doc).CAF();
             InitAtrIfNeeded(doc.Collection, doc.Id);
             await SetAtrPendingIfFirstMutation(doc.Collection);
 
-            // TODO: re-evaluate accessDeleted after CreateAsDeleted is implemented.
-            return await CreateStagedReplace(doc, content, accessDeleted: false);
+            return await CreateStagedReplace(doc, content, accessDeleted: doc.IsDeleted);
         }
 
         private async Task SetAtrPendingIfFirstMutation(ICouchbaseCollection collection)
@@ -299,7 +299,8 @@ namespace Couchbase.Transactions
                 {
                     await _testHooks.BeforeStagedReplace(this, doc.Id);
                     var contentWrapper = new JObjectContentWrapper(content);
-                    (var updatedCas, var mutationToken) = await _docs.MutateStagedReplace(doc, content, _atr).CAF();
+                    bool isTombstone = doc.Cas == 0;
+                    (var updatedCas, var mutationToken) = await _docs.MutateStagedReplace(doc, content, _atr, accessDeleted).CAF();
                     Logger?.LogDebug($"{nameof(CreateStagedReplace)} for {Redactor.UserData(doc.Id)}, attemptId={_attemptId}, preCas={doc.Cas}, postCas={updatedCas}, accessDeleted={accessDeleted}");
                     await _testHooks.AfterStagedReplaceComplete(this, doc.Id).CAF();
 
@@ -332,7 +333,8 @@ namespace Couchbase.Transactions
                         _atr.BucketName,
                         _atr.ScopeName,
                         _atr.CollectionName,
-                        updatedCas);
+                        updatedCas,
+                        isTombstone);
                 }
                 catch (Exception ex)
                 {
@@ -355,9 +357,7 @@ namespace Couchbase.Transactions
         public async Task<TransactionGetResult> InsertAsync(ICouchbaseCollection collection, string id, object content)
         {
             DoneCheck();
-            CheckExpiryAndThrow(id);
-            InitAtrIfNeeded(collection, id);
-            await SetAtrPendingIfFirstMutation(collection);
+            CheckErrors();
 
             // If this document already exists in StagedMutation, raise Error(FAIL_OTHER, cause=IllegalStateException [or platform-specific equivalent]).
             if (_stagedMutations.Any(sm => sm.Doc.FullyQualifiedId == TransactionGetResult.GetFullyQualifiedId(collection, id)))
@@ -367,6 +367,12 @@ namespace Couchbase.Transactions
                     .Build();
             }
 
+            CheckExpiryAndThrow(id, hookPoint: ITestHooks.HOOK_INSERT);
+
+            InitAtrIfNeeded(collection, id);
+            await SetAtrPendingIfFirstMutation(collection);
+
+
             return await CreateStagedInsert(collection, id, content).CAF();
         }
 
@@ -374,6 +380,7 @@ namespace Couchbase.Transactions
         {
             try
             {
+                bool isTombstone = cas == null;
                 var result = await RepeatUntilSuccessOrThrow<TransactionGetResult?>(async () =>
                 {
                     try
@@ -396,7 +403,8 @@ namespace Couchbase.Transactions
                             _atr.BucketName,
                             _atr.ScopeName,
                             _atr.CollectionName,
-                            updatedCas);
+                            updatedCas,
+                            isTombstone);
 
                         await _testHooks.AfterStagedInsertComplete(this, id).CAF();
 
@@ -430,6 +438,7 @@ namespace Couchbase.Transactions
 
                                         var docInATransaction =
                                             docWithMeta.TransactionXattrs?.Id?.Transactionid != null;
+                                        isTombstone = docWithMeta.IsDeleted;
 
                                         if (docWithMeta.IsDeleted && !docInATransaction)
                                         {
@@ -504,7 +513,6 @@ namespace Couchbase.Transactions
                     try
                     {
                         ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ATR_PENDING);
-
                         await _testHooks.BeforeAtrPending(this);
                         var t1 = _overallContext.StartTime;
                         var t2 = DateTimeOffset.UtcNow;
@@ -548,7 +556,7 @@ namespace Couchbase.Transactions
         {
             DoneCheck();
             CheckErrors();
-            CheckExpiryAndThrow(doc.Id);
+            CheckExpiryAndThrow(doc.Id, ITestHooks.HOOK_REMOVE);
             if (StagedInserts.Any(sm => sm.Doc.FullyQualifiedId == doc.FullyQualifiedId))
             {
                 throw CreateError(this, ErrorClass.FailOther)
@@ -627,7 +635,7 @@ namespace Couchbase.Transactions
             }
 
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#CommitAsync
-            CheckExpiryAndThrow(null);
+            CheckExpiryAndThrow(null, ITestHooks.HOOK_BEFORE_COMMIT);
             DoneCheck();
             if (_stagedMutations.Count ==  0)
             {
@@ -644,8 +652,11 @@ namespace Couchbase.Transactions
         private async Task SetAtrComplete()
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#SetATRComplete
-            if (HasExpiredClientSide(null) && _expirationOvertimeMode)
+            if (HasExpiredClientSide(null, ITestHooks.HOOK_ATR_COMPLETE) && !_expirationOvertimeMode)
             {
+                // If transaction has expired and not in ExpiryOvertimeMode: though technically expired, the transaction should be regarded
+                // as successful, as this is just a cleanup step.
+                // Return success.
                 return;
             }
 
@@ -663,6 +674,12 @@ namespace Couchbase.Transactions
                 if (triaged.toThrow != null)
                 {
                     throw triaged.toThrow;
+                }
+                else
+                {
+                    // Else -> Setting the ATR to COMPLETED is purely a cleanup step, there’s no need to retry it until expiry.
+                    // Simply return success (leaving state at COMMITTED).
+                    return;
                 }
             }
         }
@@ -700,9 +717,9 @@ namespace Couchbase.Transactions
                 try
                 {
                     await _testHooks.BeforeDocRemoved(this, sm.Doc.Id).CAF();
-                    if (!_expirationOvertimeMode && HasExpiredClientSide(sm.Doc.Id, ITestHooks.HOOK_COMMIT_DOC))
+                    if (!_expirationOvertimeMode && HasExpiredClientSide(sm.Doc.Id, ITestHooks.HOOK_REMOVE_DOC))
                     {
-                        throw new AttemptExpiredException(this, nameof(UnstageRemove));
+                        _expirationOvertimeMode = true;
                     }
 
                     await _docs.UnstageRemove(sm.Doc.Collection, sm.Doc.Id).CAF();
@@ -749,16 +766,17 @@ namespace Couchbase.Transactions
         private async Task UnstageInsertOrReplace(StagedMutation sm, ulong cas, object content, bool insertMode = false, bool ambiguityResolutionMode = false)
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Unstaging-Inserts-and-Replaces-Protocol-20-version
-            await _testHooks.BeforeDocCommitted(this, sm.Doc.Id).CAF();
 
             await RepeatUntilSuccessOrThrow(async () =>
             {
-                if (!_expirationOvertimeMode && HasExpiredClientSide(sm.Doc.Id, ITestHooks.HOOK_COMMIT_DOC))
-                {
-                    throw new AttemptExpiredException(this, nameof(UnstageInsertOrReplace));
-                }
                 try
                 {
+                    if (!_expirationOvertimeMode && HasExpiredClientSide(sm.Doc.Id, ITestHooks.HOOK_COMMIT_DOC))
+                    {
+                        _expirationOvertimeMode = true;
+                    }
+
+                    await _testHooks.BeforeDocCommitted(this, sm.Doc.Id).CAF();
                     IMutationResult mutateResult;
                     (ulong updatedCas, MutationToken mutationToken) = await _docs.UnstageInsertOrReplace(sm.Doc.Collection, sm.Doc.Id, cas, content, insertMode).CAF();
                     Logger?.LogInformation(
@@ -1059,8 +1077,10 @@ namespace Couchbase.Transactions
             || _state == AttemptStates.COMPLETED
             || _state == AttemptStates.ROLLED_BACK)
             {
-                // TODO: Check ErrorClass vs. Java impl.
-                throw ErrorBuilder.CreateError(this, ErrorClass.FailOther).DoNotRollbackAttempt().Build();
+                throw ErrorBuilder.CreateError(this, ErrorClass.FailOther)
+                    .Cause(new InvalidOperationException("Cannot perform operations after the transaction has been comitted or rolled back."))
+                    .DoNotRollbackAttempt()
+                    .Build();
             }
 
             await SetAtrAborted(isAppRollback).CAF();
@@ -1092,9 +1112,9 @@ namespace Couchbase.Transactions
                 Logger?.LogDebug($"[{_attemptId}] rolling back staged insert for {sm.Doc.FullyQualifiedId}");
                 try
                 {
-                    ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ROLLBACK_DOC);
+                    ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_DELETE_INSERTED);
                     await _testHooks.BeforeRollbackDeleteInserted(this, sm.Doc.Id).CAF();
-                    await _docs.ClearTransactionMetadata(sm.Doc.Collection, sm.Doc.Id, sm.Doc.Cas).CAF();
+                    await _docs.ClearTransactionMetadata(sm.Doc.Collection, sm.Doc.Id, sm.Doc.Cas, true).CAF();
                     await _testHooks.AfterRollbackDeleteInserted(this, sm.Doc.Id).CAF();
                     return RepeatAction.NoRepeat;
                 }
@@ -1131,7 +1151,7 @@ namespace Couchbase.Transactions
                 {
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ROLLBACK_DOC);
                     await _testHooks.BeforeDocRolledBack(this, sm.Doc.Id).CAF();
-                    await _docs.ClearTransactionMetadata(sm.Doc.Collection, sm.Doc.Id, sm.Doc.Cas);
+                    await _docs.ClearTransactionMetadata(sm.Doc.Collection, sm.Doc.Id, sm.Doc.Cas, sm.Doc.IsDeleted);
                     await _testHooks.AfterRollbackReplaceOrRemove(this, sm.Doc.Id).CAF();
                     return RepeatAction.NoRepeat;
                 }
@@ -1198,7 +1218,7 @@ namespace Couchbase.Transactions
             }
         }
 
-        protected void CheckExpiryAndThrow(string? docId, [CallerMemberName] string hookPoint = nameof(AttemptContext))
+        protected void CheckExpiryAndThrow(string? docId, string hookPoint)
         {
             if (HasExpiredClientSide(docId, hookPoint))
             {
@@ -1269,10 +1289,10 @@ namespace Couchbase.Transactions
                 }
 
                 // If the transaction has expired, enter ExpiryOvertimeMode and raise Error(ec=FAIL_EXPIRY, raise=TRANSACTION_EXPIRED).
-                CheckExpiryAndThrow(gr.Id);
+                CheckExpiryAndThrow(gr.Id, ITestHooks.HOOK_CHECK_WRITE_WRITE_CONFLICT);
 
                 // Do a lookupIn call to fetch the ATR entry for B.
-                ICouchbaseCollection? otherAtrCollection = null;
+                ICouchbaseCollection ? otherAtrCollection = null;
                 try
                 {
                     await _testHooks.BeforeCheckAtrEntryForBlockingDoc(this, _atr?.AtrId ?? string.Empty).CAF();
@@ -1303,8 +1323,8 @@ namespace Couchbase.Transactions
                 var txn = gr.TransactionXattrs ?? throw new ArgumentNullException(nameof(gr.TransactionXattrs));
                 txn.ValidateMinimum();
                 AtrEntry? otherAtr = _atr == null
-                    ? await AtrRepository.FindEntryForTransaction(otherAtrCollection, txn.AtrRef!.Id!, _attemptId, _config.KeyValueTimeout).CAF()
-                    : await _atr.FindEntryForTransaction(otherAtrCollection, txn.AtrRef!.Id!).CAF();
+                    ? await AtrRepository.FindEntryForTransaction(otherAtrCollection, txn.AtrRef!.Id!, txn.Id!.AttemptId!, _config.KeyValueTimeout).CAF()
+                    : await _atr.FindEntryForTransaction(otherAtrCollection, txn.AtrRef!.Id!, txn.Id?.AttemptId).CAF();
 
                 if (otherAtr == null)
                 {
@@ -1315,6 +1335,10 @@ namespace Couchbase.Transactions
 
                 if (otherAtr.IsExpired == true)
                 {
+                    var expiredAt = (otherAtr.TimestampStartMsecs!.Value.AddMilliseconds(otherAtr.ExpiresAfterMsecs!.Value));
+                    var utcNow = DateTimeOffset.UtcNow;
+                    var expiredMsecs = (utcNow - expiredAt).TotalMilliseconds;
+                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} found expired (@{expiredAt}, i.e. {expiredMsecs}ms ago) other ATR for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={_attemptId}");
                     return RepeatAction.NoRepeat;
                 }
 
@@ -1325,8 +1349,9 @@ namespace Couchbase.Transactions
                     return RepeatAction.NoRepeat;
                 }
 
-                if (sw.Elapsed > TimeSpan.FromSeconds(1))
+                if (sw.Elapsed > WriteWriteConflictTimeLimit)
                 {
+                    Logger?.LogWarning($"{nameof(CheckWriteWriteConflict)} CONFLICT DETECTED. Other ATR is {otherAtr.State} for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={_attemptId}");
                     throw CreateError(this, ErrorClass.FailWriteWriteConflict)
                         .RetryTransaction()
                         .Build();
