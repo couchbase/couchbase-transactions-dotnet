@@ -111,9 +111,9 @@ namespace Couchbase.Transactions.DataAccess
             }
 
             var bkt = await anyCollection.Scope.Bucket.Cluster.BucketAsync(atrRef.BucketName).CAF();
-            var scp = atrRef.ScopeName != null ? bkt.Scope(atrRef.ScopeName) : bkt.DefaultScope();
+            var scp = atrRef.ScopeName != null ? await bkt.ScopeAsync(atrRef.ScopeName) : await bkt.DefaultScopeAsync();
 
-            return scp.Collection(atrRef.CollectionName);
+            return await scp.CollectionAsync(atrRef.CollectionName);
         }
 
         public Task<ICouchbaseCollection?> GetAtrCollection(AtrRef atrRef) => GetAtrCollection(atrRef, Collection);

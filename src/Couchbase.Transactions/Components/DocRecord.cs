@@ -34,8 +34,8 @@ namespace Couchbase.Transactions.Components
         public async Task<ICouchbaseCollection> GetCollection(ICluster cluster)
         {
             var bucket = await cluster.BucketAsync(BucketName).CAF();
-            var scope = bucket.Scope(ScopeName);
-            return scope.Collection(CollectionName);
+            var scope = await bucket.ScopeAsync(ScopeName);
+            return await scope.CollectionAsync(CollectionName);
         }
     }
 }

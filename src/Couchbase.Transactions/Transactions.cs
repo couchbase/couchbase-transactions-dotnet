@@ -11,9 +11,9 @@ using Couchbase.Core.IO.Transcoders;
 using Couchbase.Core.Logging;
 using Couchbase.Core.Retry;
 using Couchbase.Transactions.Cleanup;
+using Couchbase.Transactions.Cleanup.LostTransactions;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.DataAccess;
-using Couchbase.Transactions.Deferred;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Error.External;
 using Couchbase.Transactions.Error.Internal;
@@ -35,9 +35,10 @@ namespace Couchbase.Transactions
         private readonly IRedactor _redactor;
         private readonly ILoggerFactory loggerFactory;
         private readonly ILogger<Transactions> _logger;
-        ////private readonly CleanupWorkQueue _cleanupWorkQueue;
+        private readonly CleanupWorkQueue? _cleanupWorkQueue;
         private readonly ConcurrentQueue<CleanupRequest> _cleanupRequests = new ConcurrentQueue<CleanupRequest>();
         private readonly Cleaner _cleaner;
+        private readonly IAsyncDisposable? _lostTransactionsCleanup;
 
         public TransactionConfig Config { get; }
         public string TransactionId { get; } = Guid.NewGuid().ToString();
@@ -69,8 +70,17 @@ namespace Couchbase.Transactions
                 ?? _cluster.ClusterServices?.GetService(typeof(ILoggerFactory)) as ILoggerFactory
                 ?? NullLoggerFactory.Instance;
             _logger = loggerFactory.CreateLogger<Transactions>();
-           ////_cleanupWorkQueue = new CleanupWorkQueue(_cluster, Config.KeyValueTimeout, _typeTranscoder);
-           _cleaner = new Cleaner(cluster, Config.KeyValueTimeout);
+
+            if (config.CleanupClientAttempts)
+            {
+                _cleanupWorkQueue = new CleanupWorkQueue(_cluster, Config.KeyValueTimeout);
+            }
+            _cleaner = new Cleaner(cluster, Config.KeyValueTimeout);
+
+            if (config.CleanupLostAttempts)
+            {
+                _lostTransactionsCleanup = new LostTransactionManager(_cluster, loggerFactory, config.CleanupWindow, config.KeyValueTimeout);
+            }
 
             // TODO: whatever the equivalent of 'cluster.environment().eventBus().publish(new TransactionsStarted(config));' is.
         }
@@ -272,6 +282,10 @@ namespace Couchbase.Transactions
             if (cleanupRequest != null)
             {
                 _cleanupRequests.Enqueue(cleanupRequest);
+                if (_cleanupWorkQueue?.TryAddCleanupRequest(cleanupRequest) == false)
+                {
+                    _logger.LogWarning("Failed to add background cleanup request: {req}", cleanupRequest);
+                }
             }
         }
 
@@ -282,9 +296,6 @@ namespace Couchbase.Transactions
                 await _cleaner.ProcessCleanupRequest(cleanupRequest).CAF();
             }
         }
-
-        public Task<TransactionResult> CommitAsync(TransactionSerializedContext serialized, PerTransactionConfig perConfig) => throw new NotImplementedException();
-        public Task<TransactionResult> RollBackAsync(TransactionSerializedContext serialized, PerTransactionConfig perConfig) => throw new NotImplementedException();
 
         protected virtual void Dispose(bool disposing)
         {
@@ -317,7 +328,16 @@ namespace Couchbase.Transactions
 
         public async ValueTask DisposeAsync()
         {
-            await CleanupAttempts().CAF();
+            if (Config.CleanupClientAttempts)
+            {
+                await CleanupAttempts().CAF();
+            }
+
+            if (_lostTransactionsCleanup != null)
+            {
+                await _lostTransactionsCleanup.DisposeAsync().CAF();
+            }
+
             Dispose();
         }
     }

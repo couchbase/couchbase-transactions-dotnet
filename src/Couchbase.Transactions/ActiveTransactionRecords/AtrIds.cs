@@ -1043,6 +1043,7 @@ namespace Couchbase.Transactions.ActiveTransactionRecords
             "_txn:atr-1022-#cb",
             "_txn:atr-1023-#10"
         };
+        public static int NumAtrs => AllAtrIds.Count;
 
         public static string GetAtrId(string key)
         {
@@ -1060,6 +1061,14 @@ namespace Couchbase.Transactions.ActiveTransactionRecords
             var bytes = Encoding.UTF8.GetBytes(key);
             long rv = (Crc32Algorithm.Compute(bytes) >> 16) & 0x7fff;
             return (int)rv & VBucketPartitionCount - 1;
+        }
+
+        public static IEnumerable<string> Nth(int startIndex, int n)
+        {
+            for (int i = startIndex; i < AllAtrIds.Count; i += n)
+            {
+                yield return AllAtrIds[i];
+            }
         }
     }
 }

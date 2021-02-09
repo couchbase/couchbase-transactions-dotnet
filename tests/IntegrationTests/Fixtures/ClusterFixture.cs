@@ -85,7 +85,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
         {
             var cluster = await OpenClusterAsync(outputHelper);
             var bucket = await cluster.BucketAsync(BucketName);
-            return bucket.DefaultCollection();
+            return await bucket.DefaultCollectionAsync();
         }
 
         public async Task InitializeAsync()
@@ -171,7 +171,13 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
 
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
             {
-                _outputHelper.WriteLine($"{logLevel}: {_categoryName} [{eventId}] {formatter(state, exception)}");
+                try
+                {
+                    _outputHelper.WriteLine($"{logLevel}: {_categoryName} [{eventId}] {formatter(state, exception)}");
+                }
+                catch (InvalidOperationException)
+                {
+                }
             }
         }
     }

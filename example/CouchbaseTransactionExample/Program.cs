@@ -19,7 +19,7 @@ namespace CouchbaseTransactionExample
                 await using var cluster =
                     await Cluster.ConnectAsync("couchbase://localhost", "Administrator", "password");
                 await using var bucket = await cluster.BucketAsync("default");
-                var collection = bucket.DefaultCollection();
+                var collection = await bucket.DefaultCollectionAsync();
                 var sampleDoc = new ExampleTransactionDocument();
                 var insertResult = await collection.InsertAsync(sampleDoc.Id,
                         sampleDoc)

@@ -101,8 +101,8 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
         public static ICluster CreateMockCluster(ICouchbaseCollection mockCollection)
         {
             var mockBucket = new Mock<IBucket>(MockBehavior.Strict);
-            mockBucket.Setup(b => b.DefaultCollection())
-                .Returns(mockCollection);
+            mockBucket.Setup(b => b.DefaultCollectionAsync())
+                .Returns(new ValueTask<ICouchbaseCollection>(mockCollection));
             var mockCluster = new Mock<ICluster>(MockBehavior.Strict);
             mockCluster.Setup(c => c.BucketAsync(It.IsAny<string>()))
                 .ReturnsAsync(mockBucket.Object);

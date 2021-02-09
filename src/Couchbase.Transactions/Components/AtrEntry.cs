@@ -132,5 +132,17 @@ namespace Couchbase.Transactions.Components
             return DateTimeOffset.FromUnixTimeMilliseconds(millis);
         }
 
+        internal static DateTimeOffset? ParseMutationCasFieldNoThrow(string? casString)
+        {
+            try
+            {
+                return ParseMutationCasField(casString);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
     }
 }

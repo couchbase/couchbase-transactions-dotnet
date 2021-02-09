@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9.0</LangVersion>
     <Nullable>enable</Nullable>
     <UserSecretsId>58fdeb9c-f0a3-449b-84bc-d7c614ab7ec8</UserSecretsId>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
@@ -46,5 +47,4 @@
     <PackageReference Include="Crc32.NET" Version="1.2.0" />
     <PackageReference Include="Polly" Version="7.1.0" />
   </ItemGroup>
-
 </Project>

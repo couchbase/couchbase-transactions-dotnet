@@ -18,13 +18,11 @@ namespace Couchbase.Transactions.Error.Attempts
     internal class ErrorTriage
     {
         private readonly AttemptContext _ctx;
-        private readonly ITestHooks _testHooks;
         private readonly ILogger? _logger;
 
-        public ErrorTriage(AttemptContext ctx, ITestHooks testHooks, ILoggerFactory? loggerFactory)
+        public ErrorTriage(AttemptContext ctx, ILoggerFactory? loggerFactory)
         {
             _ctx = ctx;
-            _testHooks = testHooks;
             _logger = loggerFactory?.CreateLogger(nameof(ErrorTriage));
         }
 

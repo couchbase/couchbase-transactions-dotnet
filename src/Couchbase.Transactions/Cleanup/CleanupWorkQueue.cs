@@ -74,8 +74,8 @@ namespace Couchbase.Transactions.Cleanup
                     }
 
                     // retry in 10 seconds plus some jitter
-                    cleanupRequest.WhenReadyToBeProcessed = DateTimeOffset.UtcNow.AddSeconds(10).AddMilliseconds(DateTime.UtcNow.Second);
-                    TryAddCleanupRequest(cleanupRequest);
+                    var updatedCleanupRequest = cleanupRequest with { WhenReadyToBeProcessed = DateTimeOffset.UtcNow.AddSeconds(10).AddMilliseconds(DateTime.UtcNow.Second) };
+                    TryAddCleanupRequest(updatedCleanupRequest);
                 }
             }
         }

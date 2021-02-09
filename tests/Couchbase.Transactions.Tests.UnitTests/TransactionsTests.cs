@@ -114,7 +114,7 @@ namespace Couchbase.Transactions.Tests.UnitTests
                     // Inserting a doc:
                     var docId = "test-id";
                     var bucket = await cluster.BucketAsync("test-bucket").ConfigureAwait(false);
-                    var collection = bucket.DefaultCollection();
+                    var collection = await bucket.DefaultCollectionAsync();
                     var insertResult = await ctx.InsertAsync(collection, docId, new JObject()).ConfigureAwait(false);
 
                     // Getting documents:
@@ -157,8 +157,8 @@ namespace Couchbase.Transactions.Tests.UnitTests
             var mockCollection = new MockCollection(mockDocs);
             var mockBucket = new Mock<IBucket>(MockBehavior.Strict);
             mockBucket.SetupGet(b => b.Name).Returns("MockBucket");
-            mockBucket.Setup(b => b.DefaultCollection())
-                .Returns(mockCollection);
+            mockBucket.Setup(b => b.DefaultCollectionAsync())
+                .Returns(new ValueTask<ICouchbaseCollection>(mockCollection));
             var mockScope = new Mock<IScope>(MockBehavior.Strict);
             mockScope.SetupGet(s => s.Name).Returns("MockScope");
             mockScope.SetupGet(s => s.Bucket).Returns(mockBucket.Object);
@@ -167,7 +167,7 @@ namespace Couchbase.Transactions.Tests.UnitTests
             mockCluster.Setup(c => c.BucketAsync(It.IsAny<string>()))
                 .ReturnsAsync(mockBucket.Object);
             mockCluster.Setup(c => c.Dispose());
-            mockCluster.Setup(c => c.DisposeAsync());
+            mockCluster.Setup(c => c.DisposeAsync()).Returns(new ValueTask());
             mockCluster.SetupGet(c => c.ClusterServices).Returns(new MockClusterServices());
             return mockCluster.Object;
         }

@@ -21,7 +21,14 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         {
             if (IsEnabled(logLevel))
             {
-                _outputHelper.WriteLine($"{logLevel}: [{eventId}] {formatter(state, exception)}");
+                try
+                {
+                    _outputHelper.WriteLine($"{logLevel}: [{eventId}] {formatter(state, exception)}");
+                }
+                catch
+                {
+                    // multi-threaded code can cause the test output helper to throw if logged to after the test is finished.
+                }
             }
         }
 

@@ -78,7 +78,7 @@ namespace Couchbase.Transactions
             Redactor = redactor ?? throw new ArgumentNullException(nameof(redactor));
             _effectiveDurabilityLevel = _overallContext.PerConfig?.DurabilityLevel ?? config.DurabilityLevel;
             Logger = loggerFactory?.CreateLogger<AttemptContext>();
-            _triage = new ErrorTriage(this, _testHooks, loggerFactory);
+            _triage = new ErrorTriage(this, loggerFactory);
             _docs = documentRepository ?? new DocumentRepository(_overallContext, _config.KeyValueTimeout, _effectiveDurabilityLevel, AttemptId);
             if (atrRepository != null)
             {
@@ -1421,14 +1421,15 @@ namespace Couchbase.Transactions
             }
 
             return new CleanupRequest(
-                attemptId: AttemptId,
-                atrId: _atr.AtrId,
-                atrCollection: _atr.Collection,
-                insertedIds: StagedInserts.Select(sm => sm.AsDocRecord()).ToList(),
-                replacedIds: StagedReplaces.Select(sm => sm.AsDocRecord()).ToList(),
-                removedIds: StagedRemoves.Select(sm => sm.AsDocRecord()).ToList(),
-                state: _state,
-                whenReadyToBeProcessed: _overallContext.AbsoluteExpiration.AddSeconds(10)
+                AttemptId: AttemptId,
+                AtrId: _atr.AtrId,
+                AtrCollection: _atr.Collection,
+                InsertedIds: StagedInserts.Select(sm => sm.AsDocRecord()).ToList(),
+                ReplacedIds: StagedReplaces.Select(sm => sm.AsDocRecord()).ToList(),
+                RemovedIds: StagedRemoves.Select(sm => sm.AsDocRecord()).ToList(),
+                State: _state,
+                WhenReadyToBeProcessed: _overallContext.AbsoluteExpiration.AddSeconds(10),
+                ProcessingErrors: new ConcurrentQueue<Exception>()
             );
         }
     }
