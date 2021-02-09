@@ -51,7 +51,6 @@ namespace Couchbase.Transactions
         private readonly ErrorTriage _triage;
 
         private readonly List<StagedMutation> _stagedMutations = new List<StagedMutation>();
-        private readonly string _attemptId;
         private readonly object _initAtrLock = new object();
         private IAtrRepository? _atr = null;
         private IDocumentRepository _docs;
@@ -59,6 +58,8 @@ namespace Couchbase.Transactions
         private readonly List<MutationToken> _finalMutations = new List<MutationToken>();
         private readonly ConcurrentDictionary<long, TransactionOperationFailedException> _previousErrors = new ConcurrentDictionary<long, TransactionOperationFailedException>();
         private bool _expirationOvertimeMode = false;
+
+        public string AttemptId { get; }
 
         internal AttemptContext(TransactionContext overallContext,
             TransactionConfig config,
@@ -69,7 +70,7 @@ namespace Couchbase.Transactions
             IDocumentRepository? documentRepository = null,
             IAtrRepository? atrRepository = null)
         {
-            _attemptId = attemptId ?? throw new ArgumentNullException(nameof(attemptId));
+            AttemptId = attemptId ?? throw new ArgumentNullException(nameof(attemptId));
             _overallContext = overallContext ?? throw new ArgumentNullException(nameof(overallContext));
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _testHooks = testHooks ?? DefaultTestHooks.Instance;
@@ -77,7 +78,7 @@ namespace Couchbase.Transactions
             _effectiveDurabilityLevel = _overallContext.PerConfig?.DurabilityLevel ?? config.DurabilityLevel;
             Logger = loggerFactory?.CreateLogger<AttemptContext>();
             _triage = new ErrorTriage(this, _testHooks, loggerFactory);
-            _docs = documentRepository ?? new DocumentRepository(_overallContext, _config.KeyValueTimeout, _effectiveDurabilityLevel, _attemptId);
+            _docs = documentRepository ?? new DocumentRepository(_overallContext, _config.KeyValueTimeout, _effectiveDurabilityLevel, AttemptId);
             if (atrRepository != null)
             {
                 _atr = atrRepository;
@@ -166,7 +167,7 @@ namespace Couchbase.Transactions
                     // Do a Sub-Document lookup, getting all transactional metadata, the “$document” virtual xattr,
                     // and the document’s body. Timeout is set as in Timeouts.
                     var docLookupResult = await _docs.LookupDocumentAsync(collection, id, fullDocument: true).CAF();
-                    Logger?.LogDebug($"{nameof(GetWithMavAsync)} for {Redactor.UserData(id)}, attemptId={_attemptId}, postCas={docLookupResult.Cas}");
+                    Logger?.LogDebug($"{nameof(GetWithMavAsync)} for {Redactor.UserData(id)}, attemptId={AttemptId}, postCas={docLookupResult.Cas}");
 
                     if (docLookupResult == null)
                     {
@@ -301,7 +302,7 @@ namespace Couchbase.Transactions
                     var contentWrapper = new JObjectContentWrapper(content);
                     bool isTombstone = doc.Cas == 0;
                     (var updatedCas, var mutationToken) = await _docs.MutateStagedReplace(doc, content, _atr, accessDeleted).CAF();
-                    Logger?.LogDebug($"{nameof(CreateStagedReplace)} for {Redactor.UserData(doc.Id)}, attemptId={_attemptId}, preCas={doc.Cas}, postCas={updatedCas}, accessDeleted={accessDeleted}");
+                    Logger?.LogDebug($"{nameof(CreateStagedReplace)} for {Redactor.UserData(doc.Id)}, attemptId={AttemptId}, preCas={doc.Cas}, postCas={updatedCas}, accessDeleted={accessDeleted}");
                     await _testHooks.AfterStagedReplaceComplete(this, doc.Id).CAF();
 
                     doc.Cas = updatedCas;
@@ -328,7 +329,7 @@ namespace Couchbase.Transactions
                         doc.Id,
                         contentWrapper,
                         _overallContext.TransactionId,
-                        _attemptId,
+                        AttemptId,
                         _atr.AtrId,
                         _atr.BucketName,
                         _atr.ScopeName,
@@ -391,14 +392,14 @@ namespace Couchbase.Transactions
                         await _testHooks.BeforeStagedInsert(this, id).CAF();
                         var contentWrapper = new JObjectContentWrapper(content);
                         (var updatedCas, var mutationToken) = await _docs.MutateStagedInsert(collection, id, content, _atr!, cas);
-                        Logger?.LogDebug($"{nameof(CreateStagedInsert)} for {Redactor.UserData(id)}, attemptId={_attemptId}, preCas={cas}, postCas={updatedCas}");
+                        Logger?.LogDebug($"{nameof(CreateStagedInsert)} for {Redactor.UserData(id)}, attemptId={AttemptId}, preCas={cas}, postCas={updatedCas}");
                         _ = _atr ?? throw new ArgumentNullException(nameof(_atr), "ATR should have already been initialized");
                         var getResult = TransactionGetResult.FromInsert(
                             collection,
                             id,
                             contentWrapper,
                             _overallContext.TransactionId,
-                            _attemptId,
+                            AttemptId,
                             _atr.AtrId,
                             _atr.BucketName,
                             _atr.ScopeName,
@@ -431,10 +432,10 @@ namespace Couchbase.Transactions
                                     // handle FAIL_DOC_ALREADY_EXISTS
                                     try
                                     {
-                                        Logger?.LogDebug($"{nameof(CreateStagedInsert)}.HandleDocExists for {Redactor.UserData(id)}, attemptId={_attemptId}, preCas = 0");
+                                        Logger?.LogDebug($"{nameof(CreateStagedInsert)}.HandleDocExists for {Redactor.UserData(id)}, attemptId={AttemptId}, preCas = 0");
                                         await _testHooks.BeforeGetDocInExistsDuringStagedInsert(this, id).CAF();
                                         var docWithMeta = await _docs.LookupDocumentAsync(collection, id, fullDocument: false).CAF();
-                                        Logger?.LogDebug($"{nameof(CreateStagedInsert)}.HandleDocExists for {Redactor.UserData(id)}, attemptId={_attemptId}, postCas={docWithMeta.Cas}");
+                                        Logger?.LogDebug($"{nameof(CreateStagedInsert)}.HandleDocExists for {Redactor.UserData(id)}, attemptId={AttemptId}, postCas={docWithMeta.Cas}");
 
                                         var docInATransaction =
                                             docWithMeta.TransactionXattrs?.Id?.Transactionid != null;
@@ -521,7 +522,7 @@ namespace Couchbase.Transactions
                         var tRemaining = tc - tElapsed;
                         var exp = (ulong)Math.Max(Math.Min(tRemaining.TotalMilliseconds, tc.TotalMilliseconds), 0);
                         await _atr.MutateAtrPending(exp);
-                        Logger?.LogDebug($"{nameof(SetAtrPending)} for {Redactor.UserData(_atr.FullPath)} (attempt={_attemptId})");
+                        Logger?.LogDebug($"{nameof(SetAtrPending)} for {Redactor.UserData(_atr.FullPath)} (attempt={AttemptId})");
                         await _testHooks.AfterAtrPending(this);
                         _state = AttemptStates.PENDING;
                         return RepeatAction.NoRepeat;
@@ -578,7 +579,7 @@ namespace Couchbase.Transactions
                 {
                     await _testHooks.BeforeStagedRemove(this, doc.Id).CAF();
                     (var updatedCas, var mutationToken) = await _docs.MutateStagedRemove(doc, _atr!).CAF();
-                    Logger?.LogDebug($"{nameof(CreateStagedRemove)} for {Redactor.UserData(doc.Id)}, attemptId={_attemptId}, preCas={doc.Cas}, postCas={updatedCas}");
+                    Logger?.LogDebug($"{nameof(CreateStagedRemove)} for {Redactor.UserData(doc.Id)}, attemptId={AttemptId}, preCas={doc.Cas}, postCas={updatedCas}");
                     await _testHooks.AfterStagedRemoveComplete(this, doc.Id).CAF();
 
                     doc.Cas = updatedCas;
@@ -664,7 +665,7 @@ namespace Couchbase.Transactions
             {
                 await _testHooks.BeforeAtrComplete(this).CAF();
                 await _atr!.MutateAtrComplete().CAF();
-                Logger?.LogDebug($"{nameof(SetAtrComplete)} for {Redactor.UserData(_atr.FullPath)} (attempt={_attemptId})");
+                Logger?.LogDebug($"{nameof(SetAtrComplete)} for {Redactor.UserData(_atr.FullPath)} (attempt={AttemptId})");
                 await _testHooks.AfterAtrComplete(this).CAF();
                 _state = AttemptStates.COMPLETED;
             }
@@ -780,7 +781,7 @@ namespace Couchbase.Transactions
                     IMutationResult mutateResult;
                     (ulong updatedCas, MutationToken mutationToken) = await _docs.UnstageInsertOrReplace(sm.Doc.Collection, sm.Doc.Id, cas, content, insertMode).CAF();
                     Logger?.LogInformation(
-                        $"Unstaged mutation successfully on {Redactor.UserData(sm.Doc.FullyQualifiedId)}, attempt={_attemptId}, insertMode={insertMode}, ambiguityResolutionMode={ambiguityResolutionMode}, preCas={cas}, postCas={updatedCas}");
+                        $"Unstaged mutation successfully on {Redactor.UserData(sm.Doc.FullyQualifiedId)}, attempt={AttemptId}, insertMode={insertMode}, ambiguityResolutionMode={ambiguityResolutionMode}, preCas={cas}, postCas={updatedCas}");
 
                     if (mutationToken != null)
                     {
@@ -853,7 +854,7 @@ namespace Couchbase.Transactions
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ATR_COMMIT);
                     await _testHooks.BeforeAtrCommit(this).CAF();
                     await _atr.MutateAtrCommit(_stagedMutations).CAF();
-                    Logger?.LogDebug($"{nameof(SetAtrCommit)} for {Redactor.UserData(_atr.FullPath)} (attempt={_attemptId})");
+                    Logger?.LogDebug($"{nameof(SetAtrCommit)} for {Redactor.UserData(_atr.FullPath)} (attempt={AttemptId})");
                     await _testHooks.AfterAtrCommit(this).CAF();
                     _state = AttemptStates.COMMITTED;
                     return RepeatAction.NoRepeat;
@@ -956,7 +957,7 @@ namespace Couchbase.Transactions
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ATR_ABORT);
                     await _testHooks.BeforeAtrAborted(this).CAF();
                     await _atr!.MutateAtrAborted(_stagedMutations).CAF();
-                    Logger?.LogDebug($"{nameof(SetAtrAborted)} for {Redactor.UserData(_atr.FullPath)} (attempt={_attemptId})");
+                    Logger?.LogDebug($"{nameof(SetAtrAborted)} for {Redactor.UserData(_atr.FullPath)} (attempt={AttemptId})");
                     await _testHooks.AfterAtrAborted(this).CAF();
                     _state = AttemptStates.ABORTED;
                     return RepeatAction.NoRepeat;
@@ -1002,7 +1003,7 @@ namespace Couchbase.Transactions
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ATR_ROLLBACK_COMPLETE);
                     await _testHooks.BeforeAtrRolledBack(this).CAF();
                     await _atr!.MutateAtrRolledBack().CAF();
-                    Logger?.LogDebug($"{nameof(SetAtrRolledBack)} for {Redactor.UserData(_atr.FullPath)} (attempt={_attemptId})");
+                    Logger?.LogDebug($"{nameof(SetAtrRolledBack)} for {Redactor.UserData(_atr.FullPath)} (attempt={AttemptId})");
                     await _testHooks.AfterAtrRolledBack(this).CAF();
                     _state = AttemptStates.ROLLED_BACK;
                     return RepeatAction.NoRepeat;
@@ -1043,7 +1044,7 @@ namespace Couchbase.Transactions
 
             var ta = new TransactionAttempt()
             {
-                AttemptId = _attemptId,
+                AttemptId = AttemptId,
                 AtrRecord = atrInfo,
                 FinalState = _state,
                 MutationTokens = _finalMutations.ToArray(),
@@ -1109,7 +1110,7 @@ namespace Couchbase.Transactions
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#RollbackAsync-Staged-InsertAsync
             await RepeatUntilSuccessOrThrow(async () =>
             {
-                Logger?.LogDebug($"[{_attemptId}] rolling back staged insert for {sm.Doc.FullyQualifiedId}");
+                Logger?.LogDebug($"[{AttemptId}] rolling back staged insert for {sm.Doc.FullyQualifiedId}");
                 try
                 {
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_DELETE_INSERTED);
@@ -1201,7 +1202,7 @@ namespace Couchbase.Transactions
                 {
                     builder.DoNotRollbackAttempt();
                 }
-                    
+
                 throw builder.Build();
             }
         }
@@ -1211,7 +1212,7 @@ namespace Couchbase.Transactions
             lock (_initAtrLock)
             {
                 _atr ??= new AtrRepository(
-                    attemptId: _attemptId,
+                    attemptId: AttemptId,
                     overallContext: _overallContext,
                     atrCollection: collection,
                     atrId: AtrIds.GetAtrId(id));
@@ -1234,13 +1235,13 @@ namespace Couchbase.Transactions
         {
             if (_expirationOvertimeMode)
             {
-                Logger?.LogInformation($"[{_attemptId}] not doing expiry check in {hookPoint}/{caller} as already in expiry overtime mode.");
+                Logger?.LogInformation($"[{AttemptId}] not doing expiry check in {hookPoint}/{caller} as already in expiry overtime mode.");
                 return;
             }
 
             if (HasExpiredClientSide(docId, hookPoint))
             {
-                Logger?.LogInformation($"[{_attemptId}] has expired in stage {hookPoint}/{caller}");
+                Logger?.LogInformation($"[{AttemptId}] has expired in stage {hookPoint}/{caller}");
                 throw new AttemptExpiredException(this, $"Attempt has expired in stage {hookPoint}/{caller}");
             }
         }
@@ -1251,12 +1252,12 @@ namespace Couchbase.Transactions
             var hook = _testHooks.HasExpiredClientSideHook(this, hookPoint, docId);
             if (over)
             {
-                Logger?.LogInformation($"expired in stage {hookPoint} /{_attemptId}");
+                Logger?.LogInformation($"expired in stage {hookPoint} /{AttemptId}");
             }
 
             if (hook)
             {
-                Logger?.LogInformation($"fake expiry in stage {hookPoint} / {_attemptId}");
+                Logger?.LogInformation($"fake expiry in stage {hookPoint} / {AttemptId}");
             }
 
             return over || hook;
@@ -1272,18 +1273,18 @@ namespace Couchbase.Transactions
             var sw = Stopwatch.StartNew();
             await RepeatUntilSuccessOrThrow(async () =>
             {
-                Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={_attemptId}");
+                Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={AttemptId}");
                 var otherAtrFromDocMeta = gr.TransactionXattrs?.AtrRef;
                 if (otherAtrFromDocMeta == null)
                 {
-                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} no other txn for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={_attemptId}");
+                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} no other txn for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={AttemptId}");
                     // If gr has no transaction Metadata, it’s fine to proceed.
                     return RepeatAction.NoRepeat;
                 }
 
                 if (gr.TransactionXattrs?.Id?.Transactionid == _overallContext.TransactionId)
                 {
-                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} same txn for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={_attemptId}");
+                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} same txn for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={AttemptId}");
                     // Else, if transaction A == transaction B, it’s fine to proceed
                     return RepeatAction.NoRepeat;
                 }
@@ -1329,7 +1330,7 @@ namespace Couchbase.Transactions
                 if (otherAtr == null)
                 {
                     // cleanup occurred, OK to proceed.
-                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} cleanup occurred on other ATR for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={_attemptId}");
+                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} cleanup occurred on other ATR for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={AttemptId}");
                     return RepeatAction.NoRepeat;
                 }
 
@@ -1338,20 +1339,20 @@ namespace Couchbase.Transactions
                     var expiredAt = (otherAtr.TimestampStartMsecs!.Value.AddMilliseconds(otherAtr.ExpiresAfterMsecs!.Value));
                     var utcNow = DateTimeOffset.UtcNow;
                     var expiredMsecs = (utcNow - expiredAt).TotalMilliseconds;
-                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} found expired (@{expiredAt}, i.e. {expiredMsecs}ms ago) other ATR for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={_attemptId}");
+                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} found expired (@{expiredAt}, i.e. {expiredMsecs}ms ago) other ATR for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={AttemptId}");
                     return RepeatAction.NoRepeat;
                 }
 
                 if (otherAtr.State == AttemptStates.COMPLETED || otherAtr.State == AttemptStates.ROLLED_BACK)
                 {
                     // ok to proceed
-                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} other ATR is {otherAtr.State} for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={_attemptId}");
+                    Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} other ATR is {otherAtr.State} for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={AttemptId}");
                     return RepeatAction.NoRepeat;
                 }
 
                 if (sw.Elapsed > WriteWriteConflictTimeLimit)
                 {
-                    Logger?.LogWarning($"{nameof(CheckWriteWriteConflict)} CONFLICT DETECTED. Other ATR is {otherAtr.State} for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={_attemptId}");
+                    Logger?.LogWarning($"{nameof(CheckWriteWriteConflict)} CONFLICT DETECTED. Other ATR is {otherAtr.State} for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={AttemptId}");
                     throw CreateError(this, ErrorClass.FailWriteWriteConflict)
                         .RetryTransaction()
                         .Build();
@@ -1419,7 +1420,7 @@ namespace Couchbase.Transactions
             }
 
             return new CleanupRequest(
-                attemptId: _attemptId,
+                attemptId: AttemptId,
                 atrId: _atr.AtrId,
                 atrCollection: _atr.Collection,
                 insertedIds: StagedInserts.Select(sm => sm.AsDocRecord()).ToList(),
