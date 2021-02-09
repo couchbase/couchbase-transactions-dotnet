@@ -60,6 +60,7 @@ namespace Couchbase.Transactions
         private bool _expirationOvertimeMode = false;
 
         public string AttemptId { get; }
+        public string TransactionId => _overallContext.TransactionId;
 
         internal AttemptContext(TransactionContext overallContext,
             TransactionConfig config,
