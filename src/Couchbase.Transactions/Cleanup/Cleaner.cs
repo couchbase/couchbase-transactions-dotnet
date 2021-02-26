@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using Couchbase.Core.IO.Transcoders;
@@ -11,6 +12,7 @@ using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Internal.Test;
 using Couchbase.Transactions.Support;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
 namespace Couchbase.Transactions.Cleanup
@@ -22,10 +24,15 @@ namespace Couchbase.Transactions.Cleanup
 
         private readonly ICluster _cluster;
         private readonly TimeSpan? _keyValueTimeout;
-        public Cleaner(ICluster cluster, TimeSpan? keyValueTimeout)
+        private readonly string _creatorName;
+        private readonly ILogger<Cleaner> _logger;
+
+        public Cleaner(ICluster cluster, TimeSpan? keyValueTimeout, ILoggerFactory loggerFactory, [CallerMemberName] string creatorName = nameof(Cleaner))
         {
             _cluster = cluster;
             _keyValueTimeout = keyValueTimeout;
+            _creatorName = creatorName;
+            _logger = loggerFactory.CreateLogger<Cleaner>();
         }
 
         public async Task<TransactionCleanupAttempt> ProcessCleanupRequest(CleanupRequest cleanupRequest, bool isRegular = true)
@@ -35,24 +42,37 @@ namespace Couchbase.Transactions.Cleanup
                 throw new ArgumentNullException(nameof(cleanupRequest.AtrId));
             }
 
+            _logger.LogDebug("Cleaner.{creator}: Processing cleanup request: {req}", _creatorName, cleanupRequest);
             try
             {
                 // TODO: ForwardCompatibilityCheck()
                 await CleanupDocs(cleanupRequest).CAF();
                 await CleanupAtrEntry(cleanupRequest).CAF();
                 return new TransactionCleanupAttempt(
-                    success: true,
-                    isRegular: isRegular,
-                    request: cleanupRequest);
+                    Success: true,
+                    IsRegular: isRegular,
+                    AttemptId: cleanupRequest.AttemptId,
+                    AtrId: cleanupRequest.AtrId,
+                    AtrBucketName: cleanupRequest.AtrCollection.Scope.Bucket.Name,
+                    AtrCollectionName: cleanupRequest.AtrCollection.Name,
+                    AtrScopeName: cleanupRequest.AtrCollection.Scope.Name,
+                    Request: cleanupRequest,
+                    FailureReason: null);
             }
             catch (Exception ex)
             {
+                _logger.LogDebug("Cleaner.{creator}: Cleanup Failed for {req}!  Reason: {ex}", _creatorName, cleanupRequest, ex);
                 // TODO: publish stream of failed cleanups and their cause.
                 return new TransactionCleanupAttempt(
-                    success: false,
-                    isRegular: isRegular,
-                    request: cleanupRequest,
-                    failureReason: ex);
+                    Success: false,
+                    IsRegular: isRegular,
+                    AttemptId: cleanupRequest.AttemptId,
+                    AtrId: cleanupRequest.AtrId,
+                    AtrBucketName: cleanupRequest.AtrCollection.Scope.Bucket.Name,
+                    AtrCollectionName: cleanupRequest.AtrCollection.Name,
+                    AtrScopeName: cleanupRequest.AtrCollection.Scope.Name,
+                    Request: cleanupRequest,
+                    FailureReason: ex);
             }
         }
 

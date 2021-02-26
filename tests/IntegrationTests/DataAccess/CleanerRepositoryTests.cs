@@ -80,7 +80,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.DataAccess
                 }
             }
 
-            await repo.RemoveClient(clientUuid);
+            await repo.RemoveClient(clientUuid, KeyValue.DurabilityLevel.Majority);
             {
                 (var clientRecordsIndex, var parsedHlc, _) = await repo.GetClientRecord();
                 Assert.NotNull(clientRecordsIndex);
@@ -89,14 +89,13 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.DataAccess
                 var clientRecordDetails = new ClientRecordDetails(clientRecordsIndex, parsedHlc, clientUuid, testCleanupWindow);
                 _outputHelper.WriteLine($"After Remove ClientRecordDetails:\n{JObject.FromObject(clientRecordDetails)}");
                 Assert.DoesNotContain(clientRecordDetails.ExpiredClientIds, s => s == clientUuid);
-                Assert.DoesNotContain(clientRecordDetails.ActiveClientIds, s => s == clientUuid);
+                Assert.DoesNotContain(clientRecordsIndex.Clients, s => s.Key == clientUuid);
                 foreach (var expiredId in clientRecordDetails.ExpiredClientIds)
                 {
                     Assert.DoesNotContain(clientRecordDetails.ActiveClientIds, s => s == expiredId);
                 }
             }
         }
-
 
         [Fact]
         public async Task TwoClientsDifferentAtrs()
@@ -131,7 +130,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.DataAccess
                 _outputHelper.WriteLine($"Initial ClientRecord before A created:\n{JObject.FromObject(clientRecordsIndex)}");
                 var clientRecordDetails = new ClientRecordDetails(clientRecordsIndex, parsedHlc, clientA, testCleanupWindow);
                 _outputHelper.WriteLine($"Initial ClientRecordDetails clientA:\n{JObject.FromObject(clientRecordDetails)}");
-                Assert.Equal(-1, clientRecordDetails.IndexOfThisClient);
+                Assert.NotEqual(-1, clientRecordDetails.IndexOfThisClient);
                 await repo.UpdateClientRecord(clientA, testCleanupWindow, ActiveTransactionRecords.AtrIds.NumAtrs, clientRecordDetails.ExpiredClientIds);
             }
 
@@ -142,7 +141,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.DataAccess
                 _outputHelper.WriteLine($"Initial ClientRecord before B created.:\n{JObject.FromObject(clientRecordsIndex)}");
                 var clientRecordDetails = new ClientRecordDetails(clientRecordsIndex, parsedHlc, clientB, testCleanupWindow);
                 _outputHelper.WriteLine($"Initial ClientRecordDetails clientB:\n{JObject.FromObject(clientRecordDetails)}");
-                Assert.Equal(-1, clientRecordDetails.IndexOfThisClient);
+                Assert.NotEqual(-1, clientRecordDetails.IndexOfThisClient);
                 await repo.UpdateClientRecord(clientB, testCleanupWindow, ActiveTransactionRecords.AtrIds.NumAtrs, clientRecordDetails.ExpiredClientIds);
             }
 

@@ -11,7 +11,7 @@ namespace Couchbase.Transactions.Support
         {
             if (timeout.HasValue)
             {
-                opts.Timeout(timeout.Value);
+                return opts.Timeout(timeout.Value);
             }
 
             return opts;
@@ -21,7 +21,7 @@ namespace Couchbase.Transactions.Support
         {
             if (timeout.HasValue)
             {
-                opts.Timeout(timeout.Value);
+                return opts.Timeout(timeout.Value);
             }
 
             return opts;
@@ -31,7 +31,17 @@ namespace Couchbase.Transactions.Support
         {
             if (timeout.HasValue)
             {
-                opts.Timeout(timeout.Value);
+                return opts.Timeout(timeout.Value);
+            }
+
+            return opts;
+        }
+
+        public static MutateInOptions Durability(this MutateInOptions opts, DurabilityLevel? durability)
+        {
+            if (durability != null)
+            {
+                return opts.Durability(durability.Value);
             }
 
             return opts;

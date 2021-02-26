@@ -531,6 +531,7 @@ namespace Couchbase.Transactions
                     catch (Exception ex)
                     {
                         var triaged = _triage.TriageSetAtrPendingErrors(ex, _expirationOvertimeMode);
+                        Logger?.LogWarning("Failed with {ec} in {method}: {reason}", triaged.ec, nameof(SetAtrPending), ex.Message);
                         switch (triaged.ec)
                         {
                             case ErrorClass.FailExpiry:
@@ -1016,13 +1017,12 @@ namespace Couchbase.Transactions
                     (ErrorClass ec, TransactionOperationFailedException? toThrow) = _triage.TriageSetAtrRolledBackErrors(ex);
                     switch (ec)
                     {
-                        case ErrorClass.FailExpiry:
-                            _expirationOvertimeMode = true;
-                            return RepeatAction.RepeatWithBackoff;
                         case ErrorClass.FailPathNotFound:
-                            // perhaps the cleanup process has removed it? Success!?
-                            return RepeatAction.NoRepeat;
                         case ErrorClass.FailDocNotFound:
+                            // Whatever has happened, the necessary handling for all these is the same: continue as if success.
+                            // The ATR entry has been removed
+                            return RepeatAction.NoRepeat;
+                        case ErrorClass.FailExpiry:
                         case ErrorClass.FailHard:
                             throw toThrow ?? CreateError(this, ec,
                                     new InvalidOperationException("Failed to generate proper exception wrapper", ex))
@@ -1216,7 +1216,8 @@ namespace Couchbase.Transactions
                     attemptId: AttemptId,
                     overallContext: _overallContext,
                     atrCollection: collection,
-                    atrId: AtrIds.GetAtrId(id));
+                    atrId: AtrIds.GetAtrId(id),
+                    atrDurability: _config.DurabilityLevel);
             }
         }
 
@@ -1414,13 +1415,17 @@ namespace Couchbase.Transactions
 
         internal CleanupRequest? GetCleanupRequest()
         {
-            if (_atr == null)
+            if (_atr == null
+                || _state == AttemptStates.NOTHING_WRITTEN
+                || _state == AttemptStates.COMPLETED
+                || _state == AttemptStates.ROLLED_BACK)
             {
                 // nothing to clean up
+                Logger.LogInformation("Skipping addition of cleanup request in state {s}", _state);
                 return null;
             }
 
-            return new CleanupRequest(
+            var cleanupRequest = new CleanupRequest(
                 AttemptId: AttemptId,
                 AtrId: _atr.AtrId,
                 AtrCollection: _atr.Collection,
@@ -1428,9 +1433,12 @@ namespace Couchbase.Transactions
                 ReplacedIds: StagedReplaces.Select(sm => sm.AsDocRecord()).ToList(),
                 RemovedIds: StagedRemoves.Select(sm => sm.AsDocRecord()).ToList(),
                 State: _state,
-                WhenReadyToBeProcessed: _overallContext.AbsoluteExpiration.AddSeconds(10),
+                WhenReadyToBeProcessed: _overallContext.AbsoluteExpiration,
                 ProcessingErrors: new ConcurrentQueue<Exception>()
             );
+
+            Logger.LogInformation("Adding collection for {col}/{atr} to run at {when}", cleanupRequest.AtrCollection.Name, cleanupRequest.AtrId, cleanupRequest.WhenReadyToBeProcessed);
+            return cleanupRequest;
         }
     }
 }

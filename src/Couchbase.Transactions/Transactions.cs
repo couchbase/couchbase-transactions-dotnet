@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,8 +36,7 @@ namespace Couchbase.Transactions
         private readonly IRedactor _redactor;
         private readonly ILoggerFactory loggerFactory;
         private readonly ILogger<Transactions> _logger;
-        private readonly CleanupWorkQueue? _cleanupWorkQueue;
-        private readonly ConcurrentQueue<CleanupRequest> _cleanupRequests = new ConcurrentQueue<CleanupRequest>();
+        private readonly CleanupWorkQueue _cleanupWorkQueue;
         private readonly Cleaner _cleaner;
         private readonly IAsyncDisposable? _lostTransactionsCleanup;
 
@@ -52,7 +52,17 @@ namespace Couchbase.Transactions
         internal ICleanupTestHooks CleanupTestHooks
         {
             get => _cleaner.TestHooks;
-            set => _cleaner.TestHooks = value;
+            set
+            {
+                _cleaner.TestHooks = value;
+                _cleanupWorkQueue.TestHooks = value;
+            }
+        }
+
+        internal void ConfigureTestHooks(ITestHooks testHooks, ICleanupTestHooks cleanupHooks)
+        {
+            TestHooks = testHooks;
+            CleanupTestHooks = cleanupHooks;
         }
 
         private Transactions(ICluster cluster, TransactionConfig config)
@@ -71,11 +81,9 @@ namespace Couchbase.Transactions
                 ?? NullLoggerFactory.Instance;
             _logger = loggerFactory.CreateLogger<Transactions>();
 
-            if (config.CleanupClientAttempts)
-            {
-                _cleanupWorkQueue = new CleanupWorkQueue(_cluster, Config.KeyValueTimeout);
-            }
-            _cleaner = new Cleaner(cluster, Config.KeyValueTimeout);
+            _cleanupWorkQueue = new CleanupWorkQueue(_cluster, Config.KeyValueTimeout,loggerFactory, config.CleanupClientAttempts);
+
+            _cleaner = new Cleaner(cluster, Config.KeyValueTimeout, loggerFactory, creatorName: nameof(Transactions));
 
             if (config.CleanupLostAttempts)
             {
@@ -247,6 +255,12 @@ namespace Couchbase.Transactions
                     // If the transaction has expired, raised Error(ec = FAIL_EXPIRY, rollback=false, raise = TRANSACTION_EXPIRED)
                     if (overallContext.IsExpired)
                     {
+                        if (ex.CausingErrorClass == ErrorClass.FailExpiry)
+                        {
+                            // already FailExpiry
+                            throw;
+                        }
+
                         _logger.LogWarning("Transaction is expired.  No more retries or rollbacks.");
                         throw ErrorBuilder.CreateError(ctx, ErrorClass.FailExpiry, ex)
                             .DoNotRollbackAttempt()
@@ -271,29 +285,30 @@ namespace Couchbase.Transactions
             }
             finally
             {
-                AddCleanupRequest(ctx);
+                if (Config.CleanupClientAttempts)
+                {
+                    AddCleanupRequest(ctx);
+                }
             }
         }
 
         private void AddCleanupRequest(AttemptContext ctx)
         {
-            // TODO: Implement config option for background cleanup.
             var cleanupRequest = ctx.GetCleanupRequest();
             if (cleanupRequest != null)
             {
-                _cleanupRequests.Enqueue(cleanupRequest);
-                if (_cleanupWorkQueue?.TryAddCleanupRequest(cleanupRequest) == false)
+                if (_cleanupWorkQueue.TryAddCleanupRequest(cleanupRequest) == false)
                 {
                     _logger.LogWarning("Failed to add background cleanup request: {req}", cleanupRequest);
                 }
             }
         }
 
-        private async Task CleanupAttempts()
+        internal async IAsyncEnumerable<TransactionCleanupAttempt> CleanupAttempts()
         {
-            foreach (var cleanupRequest in _cleanupRequests)
+            foreach (var cleanupRequest in _cleanupWorkQueue.RemainingCleanupRequests)
             {
-                await _cleaner.ProcessCleanupRequest(cleanupRequest).CAF();
+                yield return await _cleaner.ProcessCleanupRequest(cleanupRequest).CAF();
             }
         }
 
@@ -330,7 +345,7 @@ namespace Couchbase.Transactions
         {
             if (Config.CleanupClientAttempts)
             {
-                await CleanupAttempts().CAF();
+                _ = await CleanupAttempts().ToListAsync();
             }
 
             if (_lostTransactionsCleanup != null)

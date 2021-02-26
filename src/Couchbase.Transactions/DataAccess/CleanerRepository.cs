@@ -76,7 +76,7 @@ namespace Couchbase.Transactions.DataAccess
             return (attempts, parsedHlc);
         }
 
-        public async Task RemoveClient(string clientUuid)
+        public async Task RemoveClient(string clientUuid, DurabilityLevel durability = DurabilityLevel.None)
         {
             var opts = new MutateInOptions().Timeout(RemoveClientTimeout).Durability(DurabilityLevel.None);
             var specs = new MutateInSpec[]

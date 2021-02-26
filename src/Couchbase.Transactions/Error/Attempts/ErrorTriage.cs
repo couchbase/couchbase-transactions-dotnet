@@ -326,7 +326,7 @@ namespace Couchbase.Transactions.Error.Attempts
             var ec = err.Classify();
             ErrorBuilder? toThrow = ec switch
             {
-                FailExpiry => null,
+                FailExpiry => Error(ec, err, rollback: false, raise: TransactionExpired),
                 FailPathNotFound => null,
                 FailDocNotFound => Error(ec, new ActiveTransactionRecordNotFoundException(), rollback: false),
                 FailAtrFull => Error(ec, new ActiveTransactionRecordsFullException(_ctx, "ATR Full during SetAtrRolledBack."), rollback: false),

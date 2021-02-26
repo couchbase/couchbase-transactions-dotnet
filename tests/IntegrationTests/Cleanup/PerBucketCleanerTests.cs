@@ -29,7 +29,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Cleanup
         {
             var loggerFactory = new ClusterFixture.TestOutputLoggerFactory(_outputHelper);
             var clientUuid = Guid.NewGuid().ToString();
-            var cleaner = new Cleaner(_fixture.Cluster, null);
+            var cleaner = new Cleaner(_fixture.Cluster, null, loggerFactory);
             var collection = await _fixture.OpenDefaultCollection(_outputHelper);
             var repo = new CleanerRepository(collection, null);
             PerBucketCleaner perBucketCleaner = null;
@@ -60,18 +60,23 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Cleanup
         {
             var loggerFactory = new ClusterFixture.TestOutputLoggerFactory(_outputHelper);
             var clients = new List<PerBucketCleaner>(clientCount);
+            var activeClients = new List<string>();
             try
             {
                 for (int i = 0; i < clientCount; i++)
                 {
                     var clientUuid = Guid.NewGuid().ToString();
-                    var cleaner = new Cleaner(_fixture.Cluster, null);
+                    var cleaner = new Cleaner(_fixture.Cluster, null, loggerFactory);
                     var collection = await _fixture.OpenDefaultCollection(_outputHelper);
                     var repo = new CleanerRepository(collection, null);
                     var perBucketCleaner = new PerBucketCleaner(clientUuid, cleaner, repo, TimeSpan.FromSeconds(0.1), loggerFactory, startDisabled: true);
                     clients.Add(perBucketCleaner);
                     var details = await perBucketCleaner.ProcessClient(cleanupAtrs: false);
-                    Assert.Equal(i+1, details.NumActiveClients);
+                    activeClients.Add(clientUuid);
+                    foreach (var activeClient in activeClients)
+                    {
+                        Assert.Contains(details.ActiveClientIds, cid => cid == activeClient);
+                    }
                 }
             }
             finally

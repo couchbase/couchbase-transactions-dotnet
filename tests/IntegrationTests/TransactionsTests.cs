@@ -255,10 +255,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             try
             {
                 var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
-
-                var txn = Transactions.Create(_fixture.Cluster);
-                var configBuilder = TransactionConfigBuilder.Create();
+                var configBuilder = DefaultConfigBuilder(_outputHelper);
                 configBuilder.DurabilityLevel(durability);
+
+                var txn = Transactions.Create(_fixture.Cluster, configBuilder);
 
                 var result = await txn.RunAsync(async ctx =>
                 {
@@ -581,6 +581,14 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
 
             var docLookup = await DocumentRepository.LookupDocumentAsync(defaultCollection, docId, null, true);
             Assert.NotNull(docLookup.TransactionXattrs);
+        }
+
+        private TransactionConfigBuilder DefaultConfigBuilder(ITestOutputHelper outputHelper)
+        {
+            return TransactionConfigBuilder.Create()
+                .CleanupClientAttempts(false)
+                .CleanupLostAttempts(false)
+                .LoggerFactory(new ClusterFixture.TestOutputLoggerFactory(outputHelper));
         }
     }
 }

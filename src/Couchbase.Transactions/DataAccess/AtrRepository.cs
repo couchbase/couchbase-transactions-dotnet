@@ -28,30 +28,34 @@ namespace Couchbase.Transactions.DataAccess
         private readonly string _prefixedAtrFieldTimestampRollbackComplete;
         private readonly string _prefixedAtrFieldTimestampRollbackStart;
         private readonly string _prefixedAtrFieldTransactionId;
+        private readonly DurabilityLevel? _atrDurability;
 
         public string AtrId { get; }
 
+        private readonly string _atrRoot;
+
         public ICouchbaseCollection Collection { get; }
 
-        public AtrRepository(string attemptId, TransactionContext overallContext, ICouchbaseCollection atrCollection, string atrId)
+        public AtrRepository(string attemptId, TransactionContext overallContext, ICouchbaseCollection atrCollection, string atrId, DurabilityLevel? atrDurability)
         {
             AtrId = atrId;
-            var prefix = $"{TransactionFields.AtrFieldAttempts}.{attemptId}";
+            _atrRoot = $"{TransactionFields.AtrFieldAttempts}.{attemptId}";
             _attemptId = attemptId;
             _overallContext = overallContext;
             Collection = atrCollection;
-            _prefixedAtrFieldDocsInserted = $"{prefix}.{TransactionFields.AtrFieldDocsInserted}";
-            _prefixedAtrFieldDocsRemoved = $"{prefix}.{TransactionFields.AtrFieldDocsRemoved}";
-            _prefixedAtrFieldDocsReplaced = $"{prefix}.{TransactionFields.AtrFieldDocsReplaced}";
-            _prefixedAtrFieldExpiresAfterMsecs = $"{prefix}.{TransactionFields.AtrFieldExpiresAfterMsecs}";
-            _prefixedAtrFieldsPendingSentinel = $"{prefix}.{TransactionFields.AtrFieldPendingSentinel}";
-            _prefixedAtrFieldStartCommit = $"{prefix}.{TransactionFields.AtrFieldStartCommit}";
-            _prefixedAtrFieldStartTimestamp = $"{prefix}.{TransactionFields.AtrFieldStartTimestamp}";
-            _prefixedAtrFieldStatus = $"{prefix}.{TransactionFields.AtrFieldStatus}";
-            _prefixedAtrFieldTimestampComplete = $"{prefix}.{TransactionFields.AtrFieldTimestampComplete}";
-            _prefixedAtrFieldTimestampRollbackComplete = $"{prefix}.{TransactionFields.AtrFieldTimestampRollbackComplete}";
-            _prefixedAtrFieldTimestampRollbackStart = $"{prefix}.{TransactionFields.AtrFieldTimestampRollbackStart}";
-            _prefixedAtrFieldTransactionId = $"{prefix}.{TransactionFields.AtrFieldTransactionId}";
+            _prefixedAtrFieldDocsInserted = $"{_atrRoot}.{TransactionFields.AtrFieldDocsInserted}";
+            _prefixedAtrFieldDocsRemoved = $"{_atrRoot}.{TransactionFields.AtrFieldDocsRemoved}";
+            _prefixedAtrFieldDocsReplaced = $"{_atrRoot}.{TransactionFields.AtrFieldDocsReplaced}";
+            _prefixedAtrFieldExpiresAfterMsecs = $"{_atrRoot}.{TransactionFields.AtrFieldExpiresAfterMsecs}";
+            _prefixedAtrFieldsPendingSentinel = $"{_atrRoot}.{TransactionFields.AtrFieldPendingSentinel}";
+            _prefixedAtrFieldStartCommit = $"{_atrRoot}.{TransactionFields.AtrFieldStartCommit}";
+            _prefixedAtrFieldStartTimestamp = $"{_atrRoot}.{TransactionFields.AtrFieldStartTimestamp}";
+            _prefixedAtrFieldStatus = $"{_atrRoot}.{TransactionFields.AtrFieldStatus}";
+            _prefixedAtrFieldTimestampComplete = $"{_atrRoot}.{TransactionFields.AtrFieldTimestampComplete}";
+            _prefixedAtrFieldTimestampRollbackComplete = $"{_atrRoot}.{TransactionFields.AtrFieldTimestampRollbackComplete}";
+            _prefixedAtrFieldTimestampRollbackStart = $"{_atrRoot}.{TransactionFields.AtrFieldTimestampRollbackStart}";
+            _prefixedAtrFieldTransactionId = $"{_atrRoot}.{TransactionFields.AtrFieldTransactionId}";
+            _atrDurability = atrDurability;
         }
 
         public Task<AtrEntry?> FindEntryForTransaction(ICouchbaseCollection atrCollection, string atrId, string? attemptId = null)
@@ -120,29 +124,39 @@ namespace Couchbase.Transactions.DataAccess
 
         public async Task MutateAtrComplete()
         {
-            var specs = new []
+            var specs = new[]
             {
-                MutateInSpec.Upsert(_prefixedAtrFieldStatus, AttemptStates.COMPLETED.ToString(), isXattr: true),
-                MutateInSpec.Upsert(_prefixedAtrFieldTimestampComplete, MutationMacro.Cas)
+                MutateInSpec.Remove(_atrRoot, isXattr: true)
             };
 
             _ = await Collection.MutateInAsync(AtrId, specs,
-                opts => opts.StoreSemantics(StoreSemantics.Replace)).CAF();
+                opts => opts.StoreSemantics(StoreSemantics.Replace)
+                            .Durability(_atrDurability)).CAF();
         }
 
         public async Task MutateAtrPending(ulong exp)
         {
-            var dbg = await Collection.MutateInAsync(AtrId, specs =>
-                    specs.Insert(_prefixedAtrFieldTransactionId,
-                            _overallContext.TransactionId,
-                            createPath: true, isXattr: true)
-                        .Insert(_prefixedAtrFieldStatus,
-                            AttemptStates.PENDING.ToString(), createPath: false, isXattr: true)
-                        .Insert(_prefixedAtrFieldStartTimestamp, MutationMacro.Cas)
-                        .Insert(_prefixedAtrFieldExpiresAfterMsecs, exp,
+            var specs = new[]
+            {
+                MutateInSpec.Insert(_prefixedAtrFieldTransactionId,
+                    _overallContext.TransactionId, createPath: true, isXattr: true),
+                MutateInSpec.Insert(_prefixedAtrFieldStatus,
+                            AttemptStates.PENDING.ToString(), createPath: false, isXattr: true),
+                MutateInSpec.Insert(_prefixedAtrFieldStartTimestamp, MutationMacro.Cas),
+                MutateInSpec.Insert(_prefixedAtrFieldExpiresAfterMsecs, exp,
                             createPath: false, isXattr: true),
+            };
+
+            var dbg = await Collection.MutateInAsync(AtrId, specs,
                 opts => opts.StoreSemantics(StoreSemantics.Upsert)
+                            .Durability(_atrDurability)
             ).CAF();
+
+            // HACK!  Temporary workaround for NCBC-2831
+            if (dbg.MutationToken.VBucketId == 0)
+            {
+                throw new Core.Exceptions.KeyValue.PathExistsException();
+            }
         }
 
         public async Task MutateAtrCommit(IEnumerable<StagedMutation> stagedMutations)
@@ -165,7 +179,8 @@ namespace Couchbase.Transactions.DataAccess
             };
 
             _ = await Collection.MutateInAsync(AtrId, specs,
-                opts => opts.StoreSemantics(StoreSemantics.Replace)).CAF();
+                opts => opts.StoreSemantics(StoreSemantics.Replace)
+                            .Durability(_atrDurability)).CAF();
         }
 
         public async Task MutateAtrAborted(IEnumerable<StagedMutation> stagedMutations)
@@ -187,21 +202,20 @@ namespace Couchbase.Transactions.DataAccess
             };
 
             _ = await Collection.MutateInAsync(AtrId, specs,
-                opts => opts.StoreSemantics(StoreSemantics.Replace).AccessDeleted(true).CreateAsDeleted(true)).CAF();
+                opts => opts.StoreSemantics(StoreSemantics.Replace).AccessDeleted(true).CreateAsDeleted(true)
+                            .Durability(_atrDurability)).CAF();
         }
 
         public async Task MutateAtrRolledBack()
         {
             var specs = new MutateInSpec[]
             {
-                MutateInSpec.Upsert(_prefixedAtrFieldStatus,
-                    AttemptStates.ROLLED_BACK.ToString(), isXattr: true),
-                MutateInSpec.Upsert(_prefixedAtrFieldTimestampRollbackComplete,
-                    MutationMacro.Cas),
+                MutateInSpec.Remove(_atrRoot, isXattr: true),
             };
 
             _ = await Collection.MutateInAsync(AtrId, specs,
-                opts => opts.StoreSemantics(StoreSemantics.Replace).AccessDeleted(true).CreateAsDeleted(true)).CAF();
+                opts => opts.StoreSemantics(StoreSemantics.Replace)
+                            .Durability(_atrDurability)).CAF();
         }
 
         public async Task<string> LookupAtrState()

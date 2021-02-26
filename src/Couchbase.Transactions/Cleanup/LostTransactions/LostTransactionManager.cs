@@ -162,7 +162,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
             var bucket = await _cluster.BucketAsync(bucketName).CAF();
             var collection = await bucket.DefaultCollectionAsync().CAF();
             var repository = new CleanerRepository(collection, _keyValueTimeout);
-            var cleaner = new Cleaner(_cluster, _keyValueTimeout);
+            var cleaner = new Cleaner(_cluster, _keyValueTimeout, _loggerFactory, creatorName: nameof(LostTransactionManager));
 
             return new PerBucketCleaner(ClientUuid, cleaner, repository, _cleanupWindow, _loggerFactory, startDisabled) { TestHooks = TestHooks };
         }

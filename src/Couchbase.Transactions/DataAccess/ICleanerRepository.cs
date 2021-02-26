@@ -17,7 +17,7 @@ namespace Couchbase.Transactions.DataAccess
         ICouchbaseCollection Collection { get; }
         Task<(ClientRecordsIndex? clientRecord, ParsedHLC parsedHlc, ulong? cas)> GetClientRecord();
         Task CreatePlaceholderClientRecord(ulong? cas = null);
-        Task RemoveClient(string clientUuid);
+        Task RemoveClient(string clientUuid, DurabilityLevel durability = DurabilityLevel.None);
         Task UpdateClientRecord(string clientUuid, TimeSpan cleanupWindow, int numAtrs, IReadOnlyList<string> expiredClientIds);
 
         Task<(Dictionary<string, AtrEntry> attempts, ParsedHLC parsedHlc)> LookupAttempts(string atrId);

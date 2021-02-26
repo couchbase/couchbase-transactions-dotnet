@@ -92,6 +92,14 @@ namespace Couchbase.Transactions.Error
                 return ErrorClass.FailAtrFull;
             }
 
+            if (ex is CouchbaseException cbe)
+            {
+                if (cbe.Context?.Message.Contains("XATTR_EINVAL") == true)
+                {
+                    return ErrorClass.FailHard;
+                }
+            }
+
             return ErrorClass.FailOther;
         }
 
