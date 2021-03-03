@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using Couchbase.Transactions.Components;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Couchbase.Transactions.DataModel
 {
@@ -19,6 +20,9 @@ namespace Couchbase.Transactions.DataModel
 
         [JsonProperty("restore")]
         public DocumentMetadata? RestoreMetadata { get; set; }
+
+        [JsonProperty("fc")]
+        public JObject? ForwardCompatibility { get; set; }
 
         internal void ValidateMinimum()
         {

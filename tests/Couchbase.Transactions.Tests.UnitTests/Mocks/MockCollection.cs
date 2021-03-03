@@ -111,6 +111,11 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
             return mockCluster.Object;
         }
 
+        public Task UnlockAsync(string id, ulong cas, UnlockOptions? options = null)
+        {
+            throw new NotImplementedException();
+        }
+
         public uint? Cid { get; }
         public string Name { get; } = "default";
         public IScope Scope { get; set; } = new Mock<IScope>().Object;
@@ -205,6 +210,11 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
         }
 
         public Task UnlockAsync<T>(string id, ulong cas, UnlockOptions? options = null)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task UnlockAsync(string id, ulong cas, UnlockOptions? options = null)
         {
             throw new NotImplementedException();
         }

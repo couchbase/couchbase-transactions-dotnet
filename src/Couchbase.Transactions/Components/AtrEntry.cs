@@ -59,6 +59,9 @@ namespace Couchbase.Transactions.Components
         [JsonProperty(TransactionFields.AtrFieldDocsRemoved)]
         public IList<DocRecord> RemovedIds { get; set; } = EmptyDocRecords;
 
+        [JsonProperty("fc")]
+        public JObject? ForwardCompatibility { get; set; } = null;
+
         public ulong? Cas { get; }
 
         public bool? IsExpired

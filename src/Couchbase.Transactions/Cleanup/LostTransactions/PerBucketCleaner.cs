@@ -54,16 +54,27 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
             _processCleanupTimer.Change(TimeSpan.Zero, _cleanupWindow);
         }
 
+        public void Stop()
+        {
+            _processCleanupTimer.Change(-1, (int)_cleanupWindow.TotalMilliseconds);
+        }
+
         public string BucketName => _repository.BucketName;
         public string ScopeName => _repository.ScopeName;
         public string CollectionName => _repository.CollectionName;
 
         public string FullBucketName { get; }
 
-        public override string ToString() => FullBucketName;
+        public override string ToString()
+        {
+            return new Summary(FullBucketName, ClientUuid, Running, RunCount).ToString();
+        }
+
+        private record Summary(string FullBucketName, string ClientUuid, bool Running, long RunCount);
 
         public void Dispose()
         {
+            Stop();
             if (!_cts.IsCancellationRequested)
             {
                 _processCleanupTimer.Change(-1, -1);
@@ -242,7 +253,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
 
         private async Task CleanupAtr(string atrId, CancellationToken cancellationToken)
         {
-            _logger.LogDebug("Cleanup up ATR {atrId} on '{bkt}'", atrId, FullBucketName);
+            _logger.LogDebug("{this} Cleaning up ATR {atrId}", this, atrId);
             Dictionary<string, AtrEntry> attempts;
             ParsedHLC parsedHlc;
             try

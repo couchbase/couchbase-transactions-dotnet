@@ -17,7 +17,7 @@ using Newtonsoft.Json.Linq;
 
 namespace Couchbase.Transactions.Cleanup
 {
-    internal class CleanupWorkQueue
+    internal class CleanupWorkQueue : IDisposable
     {
         // CBD-3677
         public const int MaxCleanupQueueDepth = 10_000;
@@ -99,9 +99,26 @@ namespace Couchbase.Transactions.Cleanup
         /// <returns>A Task representing asynchronous work.</returns>
         internal async Task ForceFlushAsync()
         {
-            _forceFlush.Cancel(throwOnFirstException: false);
-            _workQueue.CompleteAdding();
+            StopProcessing();
             await _consumer;
+        }
+
+        private void StopProcessing()
+        {
+            try
+            {
+                _forceFlush.Cancel(throwOnFirstException: false);
+                _workQueue.CompleteAdding();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        public void Dispose()
+        {
+            StopProcessing();
+            _workQueue.Dispose();
         }
     }
 }

@@ -107,6 +107,8 @@ namespace Couchbase.Transactions.Internal.Test
 
         bool HasExpiredClientSideHook(AttemptContext self, string place, string? docId) => false;
         Task<int?> BeforeAtrCommitAmbiguityResolution(AttemptContext attemptContext) => Task.FromResult<int?>(0);
+
+        Task<string?> AtrIdForVBucket(AttemptContext self, int vbucketId) => Task.FromResult<string?>(null);
     }
 
     /// <summary>

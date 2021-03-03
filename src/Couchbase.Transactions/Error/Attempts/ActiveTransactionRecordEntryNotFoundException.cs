@@ -6,5 +6,6 @@ namespace Couchbase.Transactions.Error.Attempts
 {
     public class ActiveTransactionRecordEntryNotFoundException : CouchbaseException
     {
+        public string Id { get; init; }
     }
 }

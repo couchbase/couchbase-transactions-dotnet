@@ -131,10 +131,9 @@ namespace Couchbase.Transactions.Cleanup
                         if (op.IsDeleted)
                         {
                             await collection.MutateInAsync(dr.Id, specs =>
-                                    specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
-                                        .SetDoc(finalDoc),
+                                    specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true),
                                 opts => opts.Cas(op.Cas)
-                                    .CreateAsDeleted(true)
+                                    .AccessDeleted(true)
                                     .Timeout(_keyValueTimeout));
                         }
                         else
@@ -156,7 +155,7 @@ namespace Couchbase.Transactions.Cleanup
                         await collection.MutateInAsync(dr.Id, specs =>
                                 specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true),
                             opts => opts.Cas(op.Cas)
-                                .CreateAsDeleted(true)
+                                .AccessDeleted(true)
                                 .Timeout(_keyValueTimeout));
                     }).CAF();
             }
@@ -184,8 +183,8 @@ namespace Couchbase.Transactions.Cleanup
                                     specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
                                         .SetDoc(finalDoc)
                                 , opts => opts.Cas(op.Cas)
-                                    .AccessDeleted(true)
-                                    .CreateAsDeleted(true)
+                                    ////.AccessDeleted(true)
+                                    // TODO: Durability level
                                     .Timeout(_keyValueTimeout)).CAF();
                         }
                     }).CAF();

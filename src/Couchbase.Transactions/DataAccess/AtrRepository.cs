@@ -36,9 +36,10 @@ namespace Couchbase.Transactions.DataAccess
 
         public ICouchbaseCollection Collection { get; }
 
-        public AtrRepository(string attemptId, TransactionContext overallContext, ICouchbaseCollection atrCollection, string atrId, DurabilityLevel? atrDurability)
+        public AtrRepository(string attemptId, TransactionContext overallContext, ICouchbaseCollection atrCollection, string atrId, DurabilityLevel? atrDurability, string? testHookAtrId = null)
         {
-            AtrId = atrId;
+            // Ugly test hook handling.
+            AtrId = testHookAtrId ?? atrId;
             _atrRoot = $"{TransactionFields.AtrFieldAttempts}.{attemptId}";
             _attemptId = attemptId;
             _overallContext = overallContext;

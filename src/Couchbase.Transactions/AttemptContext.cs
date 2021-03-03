@@ -26,6 +26,7 @@ using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Error.Attempts;
 using Couchbase.Transactions.Error.External;
 using Couchbase.Transactions.Error.Internal;
+using Couchbase.Transactions.Forwards;
 using Couchbase.Transactions.Internal;
 using Couchbase.Transactions.Internal.Test;
 using Couchbase.Transactions.Log;
@@ -137,6 +138,7 @@ namespace Couchbase.Transactions
                     var result = await GetWithMavAsync(collection, id);
 
                     await _testHooks.AfterGetComplete(this, id).CAF();
+                    await ForwardCompatibility.Check(this, ForwardCompatibility.Gets, result?.TransactionXattrs?.ForwardCompatibility);
                     return result;
                 }
                 catch (Exception ex)
@@ -210,6 +212,8 @@ namespace Couchbase.Transactions
                     var atrEntry = await findEntryTask.CAF()
                                    ?? throw new ActiveTransactionRecordEntryNotFoundException();
 
+                    await ForwardCompatibility.Check(this, ForwardCompatibility.GetsReadingAtr, atrEntry.ForwardCompatibility);
+
                     if (atrEntry.State == AttemptStates.COMMITTED || atrEntry.State == AttemptStates.COMPLETED)
                     {
                         if (txn.Operation?.Type == "remove")
@@ -277,8 +281,8 @@ namespace Couchbase.Transactions
             DoneCheck();
             CheckErrors();
             CheckExpiryAndThrow(doc.Id, ITestHooks.HOOK_REPLACE);
-            await CheckWriteWriteConflict(doc).CAF();
-            InitAtrIfNeeded(doc.Collection, doc.Id);
+            await CheckWriteWriteConflict(doc, ForwardCompatibility.WriteWriteConflictReplacing).CAF();
+            await InitAtrIfNeeded(doc.Collection, doc.Id);
             await SetAtrPendingIfFirstMutation(doc.Collection);
 
             return await CreateStagedReplace(doc, content, accessDeleted: doc.IsDeleted);
@@ -371,7 +375,7 @@ namespace Couchbase.Transactions
 
             CheckExpiryAndThrow(id, hookPoint: ITestHooks.HOOK_INSERT);
 
-            InitAtrIfNeeded(collection, id);
+            await InitAtrIfNeeded(collection, id);
             await SetAtrPendingIfFirstMutation(collection);
 
 
@@ -437,6 +441,7 @@ namespace Couchbase.Transactions
                                         await _testHooks.BeforeGetDocInExistsDuringStagedInsert(this, id).CAF();
                                         var docWithMeta = await _docs.LookupDocumentAsync(collection, id, fullDocument: false).CAF();
                                         Logger?.LogDebug($"{nameof(CreateStagedInsert)}.HandleDocExists for {Redactor.UserData(id)}, attemptId={AttemptId}, postCas={docWithMeta.Cas}");
+                                        await ForwardCompatibility.Check(this, ForwardCompatibility.WriteWriteConflictInsertingGet, docWithMeta?.TransactionXattrs?.ForwardCompatibility);
 
                                         var docInATransaction =
                                             docWithMeta.TransactionXattrs?.Id?.Transactionid != null;
@@ -466,7 +471,7 @@ namespace Couchbase.Transactions
                                         {
                                             // Else call the CheckWriteWriteConflict logic, which conveniently does everything we need to handle the above cases.
                                             var getResult = docWithMeta.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnOther);
-                                            await CheckWriteWriteConflict(getResult).CAF();
+                                            await CheckWriteWriteConflict(getResult, ForwardCompatibility.WriteWriteConflictInserting).CAF();
 
                                             // If this logic succeeds, we are ok to overwrite the doc.
                                             // Perform this algorithm (createStagedInsert) from the top, with cas=the cas from the get.
@@ -567,8 +572,8 @@ namespace Couchbase.Transactions
                     .Build();
             }
 
-            await CheckWriteWriteConflict(doc).CAF();
-            InitAtrIfNeeded(doc.Collection, doc.Id);
+            await CheckWriteWriteConflict(doc, ForwardCompatibility.WriteWriteConflictRemoving).CAF();
+            await InitAtrIfNeeded(doc.Collection, doc.Id);
             await SetAtrPendingIfFirstMutation(doc.Collection).CAF();
             await CreateStagedRemove(doc).CAF();
         }
@@ -1208,16 +1213,20 @@ namespace Couchbase.Transactions
             }
         }
 
-        protected void InitAtrIfNeeded(ICouchbaseCollection collection, string id)
+        protected async Task InitAtrIfNeeded(ICouchbaseCollection collection, string id)
         {
+            var testHookAtrId = await _testHooks.AtrIdForVBucket(this, AtrIds.GetVBucketId(id));
+            var atrId = AtrIds.GetAtrId(id);
             lock (_initAtrLock)
             {
+                // TODO: AtrRepository should be built via factory to actually support mocking.
                 _atr ??= new AtrRepository(
                     attemptId: AttemptId,
                     overallContext: _overallContext,
                     atrCollection: collection,
-                    atrId: AtrIds.GetAtrId(id),
-                    atrDurability: _config.DurabilityLevel);
+                    atrId: atrId,
+                    atrDurability: _config.DurabilityLevel,
+                    testHookAtrId: testHookAtrId);
             }
         }
 
@@ -1266,7 +1275,7 @@ namespace Couchbase.Transactions
         }
 
         // TODO: move this to a repository class
-        internal async Task CheckWriteWriteConflict(TransactionGetResult gr)
+        internal async Task CheckWriteWriteConflict(TransactionGetResult gr, string interactionPoint)
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#CheckWriteWriteConflict
             // This logic checks and handles a document X previously read inside a transaction, A, being involved in another transaction B.
@@ -1276,6 +1285,7 @@ namespace Couchbase.Transactions
             await RepeatUntilSuccessOrThrow(async () =>
             {
                 Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={AttemptId}");
+                await ForwardCompatibility.Check(this, interactionPoint, gr.TransactionXattrs?.ForwardCompatibility).CAF();
                 var otherAtrFromDocMeta = gr.TransactionXattrs?.AtrRef;
                 if (otherAtrFromDocMeta == null)
                 {
@@ -1336,6 +1346,8 @@ namespace Couchbase.Transactions
                     return RepeatAction.NoRepeat;
                 }
 
+                await ForwardCompatibility.Check(this, ForwardCompatibility.WriteWriteConflictReadingAtr, otherAtr.ForwardCompatibility).CAF();
+
                 if (otherAtr.IsExpired == true)
                 {
                     var expiredAt = (otherAtr.TimestampStartMsecs!.Value.AddMilliseconds(otherAtr.ExpiresAfterMsecs!.Value));
@@ -1375,6 +1387,16 @@ namespace Couchbase.Transactions
             RepeatWithDelay = 1,
             RepeatNoDelay = 2,
             RepeatWithBackoff = 3
+        }
+
+        private async Task<ICouchbaseCollection> GetAtrCollection(AtrRef atrRef, ICouchbaseCollection anyCollection)
+        {
+            var getCollectionTask = _atr?.GetAtrCollection(atrRef)
+                                    ?? AtrRepository.GetAtrCollection(atrRef, anyCollection);
+            var docAtrCollection = await getCollectionTask.CAF()
+                                   ?? throw new ActiveTransactionRecordNotFoundException();
+
+            return docAtrCollection;
         }
 
         private async Task<T> RepeatUntilSuccessOrThrow<T>(Func<Task<(RepeatAction retry, T finalVal)>> func, int retryLimit = 100_000, [CallerMemberName] string caller = nameof(RepeatUntilSuccessOrThrow))

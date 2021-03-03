@@ -15,7 +15,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
 {
     public class ClusterFixture : IAsyncLifetime
     {
-        public static readonly string BucketName = "TxnIntegrationTestBucket";
+        public static readonly string BucketName = "default";
         internal static StringBuilder Logs = new StringBuilder();
         private readonly TestSettings _settings;
         private bool _bucketOpened;
@@ -110,6 +110,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
             }
             catch (BucketExistsException)
             {
+            }
+            catch (System.Net.Http.HttpRequestException)
+            {
+                // why did it fail?
             }
         }
 
