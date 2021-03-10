@@ -10,20 +10,20 @@ namespace Couchbase.Transactions.Error
     internal class ErrorBuilder
     {
         public const ErrorBuilder None = null;
-        private readonly AttemptContext _ctx;
+        private readonly AttemptContext? _ctx;
         private readonly ErrorClass _causingErrorClass;
         private TransactionOperationFailedException.FinalError _toRaise = TransactionOperationFailedException.FinalError.TransactionFailed;
         private bool _rollbackAttempt = true;
         private bool _retryTransaction = false;
         private Exception _cause = new Exception("generic exception cause");
 
-        private ErrorBuilder(AttemptContext ctx, ErrorClass causingErrorClass)
+        private ErrorBuilder(AttemptContext? ctx, ErrorClass causingErrorClass)
         {
             _ctx = ctx;
             _causingErrorClass = causingErrorClass;
         }
 
-        public static ErrorBuilder CreateError(AttemptContext ctx, ErrorClass causingErrorClass, Exception? causingException = null)
+        public static ErrorBuilder CreateError(AttemptContext? ctx, ErrorClass causingErrorClass, Exception? causingException = null)
         {
             var builder = new ErrorBuilder(ctx, causingErrorClass);
             if (causingException != null)
@@ -74,7 +74,7 @@ namespace Couchbase.Transactions.Error
         }
 
         public TransactionOperationFailedException Build() =>
-            new TransactionOperationFailedException(_ctx,
+            new TransactionOperationFailedException(
                 _causingErrorClass,
                 _rollbackAttempt,
                 _retryTransaction,

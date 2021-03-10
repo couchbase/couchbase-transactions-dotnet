@@ -20,7 +20,7 @@ namespace Couchbase.Transactions.Forwards
         public const string GetsReadingAtr = "G_A";
         public const string CleanupEntry = "CL_E";
 
-        public static async Task Check(AttemptContext ctx, string interactionPoint, JObject? fc)
+        public static async Task Check(AttemptContext? ctx, string interactionPoint, JObject? fc)
         {
             if (fc == null)
             {
@@ -44,14 +44,14 @@ namespace Couchbase.Transactions.Forwards
                         {
                             if (ProtocolVersion.SupportedVersion < check.ProtocolVersion.Value)
                             {
-                                failureMessage = $"SupportedVersion {ProtocolVersion.SupportedVersion} is less than required {check.ProtocolVersion}";
+                                failureMessage = $"SupportedVersion {ProtocolVersion.SupportedVersion} is less than required {check.ProtocolVersion} @{interactionPoint}";
                             }
                         }
                         else if (check.ExtensionCheck != null)
                         {
                             if (!ProtocolVersion.Supported(check.ExtensionCheck))
                             {
-                                failureMessage = $"Extension '{check.ExtensionCheck}' is not supported.";
+                                failureMessage = $"Extension '{check.ExtensionCheck}' is not supported @{interactionPoint}.";
                             }
                         }
 

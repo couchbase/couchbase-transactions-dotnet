@@ -114,7 +114,7 @@ namespace Couchbase.Transactions
                 );
         }
 
-        internal static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection collection, string id, IContentAsWrapper content, ulong cas, DocumentMetadata documentMetadata, bool isDeleted, TransactionXattrs? transactionXattrs)
+        internal static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection collection, string id, IContentAsWrapper content, ulong cas, DocumentMetadata documentMetadata, bool isDeleted, TransactionXattrs? transactionXattrs, TransactionJsonDocumentStatus docStatus)
         {
             return new TransactionGetResult(
                 id: id,
@@ -122,7 +122,7 @@ namespace Couchbase.Transactions
                 cas: cas,
                 collection: collection,
                 transactionXattrs: transactionXattrs,
-                status: TransactionJsonDocumentStatus.Normal,
+                status: docStatus,
                 documentMetadata: documentMetadata,
                 isTombstone: isDeleted
             );

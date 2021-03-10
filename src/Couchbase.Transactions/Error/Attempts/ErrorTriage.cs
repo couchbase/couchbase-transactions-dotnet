@@ -66,15 +66,15 @@ namespace Couchbase.Transactions.Error.Attempts
             //   Else -> raise Error(ec, cause=err)
 
             var ec = err.Classify();
-            ErrorBuilder? toThrow = ec switch
+            TransactionOperationFailedException? toThrow = ec switch
             {
-                FailDocNotFound => None,
-                FailHard => Error(ec, err, rollback: false),
-                FailTransient => Error(ec, err, retry:true),
-                _ => Error(ec, err)
+                FailDocNotFound => null,
+                FailHard => Error(ec, err, rollback: false).Build(),
+                FailTransient => Error(ec, err, retry:true).Build(),
+                _ => err is TransactionOperationFailedException alreadyClassified ? alreadyClassified : Error(ec, err).Build()
             };
 
-            return (ec, toThrow?.Build());
+            return (ec, toThrow);
         }
 
         public (ErrorClass ec, TransactionOperationFailedException? toThrow) TriageCreateStagedRemoveOrReplaceError(Exception err)
@@ -376,14 +376,14 @@ namespace Couchbase.Transactions.Error.Attempts
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Get-a-Document-With-MAV-Logic
             // after "Do a Sub-Document lookup of the transaction's ATR entry"
             var ec = err.Classify();
-            ErrorBuilder? toThrow = ec switch
+            TransactionOperationFailedException? toThrow = ec switch
             {
                 FailPathNotFound => throw new ActiveTransactionRecordEntryNotFoundException(),
-                FailDocNotFound => Error(ec, new ActiveTransactionRecordNotFoundException()),
-                _ => Error(ec, err)
+                FailDocNotFound => Error(ec, new ActiveTransactionRecordNotFoundException()).Build(),
+                _ => err is TransactionOperationFailedException alreadyClassified ? alreadyClassified : Error(ec, err).Build()
             };
 
-            return (ec, toThrow?.Build());
+            return (ec, toThrow);
         }
     }
 }

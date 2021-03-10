@@ -174,7 +174,7 @@ namespace Couchbase.Transactions
 
                     if (docLookupResult == null)
                     {
-                        return null;
+                        return TransactionGetResult.Empty;
                     }
 
                     var txn = docLookupResult?.TransactionXattrs;
@@ -185,16 +185,16 @@ namespace Couchbase.Transactions
                     {
                         // Not in a transaction, or insufficient transaction metadata
                         return docLookupResult!.IsDeleted
-                            ? null
-                            : docLookupResult.GetPreTransactionResult();
+                            ? TransactionGetResult.Empty
+                            : docLookupResult.GetPreTransactionResult(TransactionJsonDocumentStatus.Normal);
                     }
 
                     if (resolveMissingAtrEntry == txn.Id?.AttemptId)
                     {
                         // This is our second attempt getting the document, and it’s in the same state as before
                         return docLookupResult!.IsDeleted
-                            ? null
-                            : docLookupResult.GetPreTransactionResult();
+                            ? TransactionGetResult.Empty
+                            : docLookupResult.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnOther);
                     }
 
                     resolveMissingAtrEntry = txn.Id?.AttemptId;
@@ -207,10 +207,22 @@ namespace Couchbase.Transactions
                     var docAtrCollection = await getCollectionTask.CAF()
                                            ?? throw new ActiveTransactionRecordNotFoundException();
 
-                    var findEntryTask = _atr?.FindEntryForTransaction(docAtrCollection, txn.AtrRef.Id!)
+                    var findEntryTask = _atr?.FindEntryForTransaction(docAtrCollection, txn.AtrRef.Id!, txn.Id!.AttemptId)
                         ?? AtrRepository.FindEntryForTransaction(docAtrCollection, txn.AtrRef.Id!, txn.Id!.AttemptId, _config.KeyValueTimeout);
                     var atrEntry = await findEntryTask.CAF()
                                    ?? throw new ActiveTransactionRecordEntryNotFoundException();
+
+                    if (txn.Id!.AttemptId == AttemptId)
+                    {
+                        if (txn.Operation?.Type == "remove")
+                        {
+                            return TransactionGetResult.Empty;
+                        }
+                        else
+                        {
+                            return docLookupResult!.GetPostTransactionResult(TransactionJsonDocumentStatus.OwnWrite);
+                        }
+                    }
 
                     await ForwardCompatibility.Check(this, ForwardCompatibility.GetsReadingAtr, atrEntry.ForwardCompatibility);
 
@@ -218,7 +230,7 @@ namespace Couchbase.Transactions
                     {
                         if (txn.Operation?.Type == "remove")
                         {
-                            return null;
+                            return TransactionGetResult.Empty;
                         }
 
                         return docLookupResult!.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnCommitted);
@@ -226,10 +238,10 @@ namespace Couchbase.Transactions
 
                     if (docLookupResult!.IsDeleted || txn.Operation?.Type == "insert")
                     {
-                        return null;
+                        return TransactionGetResult.Empty;
                     }
 
-                    return docLookupResult.GetPreTransactionResult();
+                    return docLookupResult.GetPreTransactionResult(TransactionJsonDocumentStatus.InTxnOther);
                 }
                 catch (ActiveTransactionRecordEntryNotFoundException)
                 {
@@ -241,8 +253,9 @@ namespace Couchbase.Transactions
                     throw _triage.AssertNotNull(atrLookupTriage, atrLookupException);
                 }
             }
-            catch (ActiveTransactionRecordEntryNotFoundException)
+            catch (ActiveTransactionRecordEntryNotFoundException ex)
             {
+                Logger.LogWarning("ATR entry not found: {ex}", ex);
                 if (resolveMissingAtrEntry == null)
                 {
                     throw;
@@ -1284,7 +1297,7 @@ namespace Couchbase.Transactions
             var sw = Stopwatch.StartNew();
             await RepeatUntilSuccessOrThrow(async () =>
             {
-                Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)} for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={AttemptId}");
+                Logger?.LogDebug($"{nameof(CheckWriteWriteConflict)}@{interactionPoint} for {Redactor.UserData(gr.FullyQualifiedId)}, attempt={AttemptId}");
                 await ForwardCompatibility.Check(this, interactionPoint, gr.TransactionXattrs?.ForwardCompatibility).CAF();
                 var otherAtrFromDocMeta = gr.TransactionXattrs?.AtrRef;
                 if (otherAtrFromDocMeta == null)

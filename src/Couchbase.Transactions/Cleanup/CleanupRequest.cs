@@ -5,6 +5,7 @@ using System.Text;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Components;
 using Couchbase.Transactions.Support;
+using Newtonsoft.Json.Linq;
 
 namespace Couchbase.Transactions.Cleanup
 {
@@ -17,5 +18,6 @@ namespace Couchbase.Transactions.Cleanup
             List<DocRecord> RemovedIds,
             AttemptStates State,
             DateTimeOffset WhenReadyToBeProcessed,
-            ConcurrentQueue<Exception> ProcessingErrors);
+            ConcurrentQueue<Exception> ProcessingErrors,
+            JObject? ForwardCompatibility = null);
 }

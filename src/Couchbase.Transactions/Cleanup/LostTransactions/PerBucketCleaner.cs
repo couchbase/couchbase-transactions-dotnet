@@ -318,7 +318,8 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                         ReplacedIds: attempt.ReplacedIds.ToList(),
                         State: attempt.State,
                         WhenReadyToBeProcessed: DateTimeOffset.UtcNow,
-                        ProcessingErrors: new ConcurrentQueue<Exception>());
+                        ProcessingErrors: new ConcurrentQueue<Exception>(),
+                        ForwardCompatibility: kvp.Value.ForwardCompatibility);
 
                     if (_cts.IsCancellationRequested)
                     {

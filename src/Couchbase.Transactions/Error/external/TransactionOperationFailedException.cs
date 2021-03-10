@@ -10,8 +10,6 @@ namespace Couchbase.Transactions.Error.External
 
         private static long ExceptionCount = 0;
 
-        private readonly AttemptContext _ctx;
-
         public long ExceptionNumber { get; }
         public ErrorClass CausingErrorClass { get; }
         public bool AutoRollbackAttempt { get; }
@@ -32,7 +30,6 @@ namespace Couchbase.Transactions.Error.External
         }
 
         public TransactionOperationFailedException(
-            AttemptContext ctx,
             ErrorClass causingErrorClass,
             bool autoRollbackAttempt,
             bool retryTransaction,
@@ -40,7 +37,6 @@ namespace Couchbase.Transactions.Error.External
             FinalError finalErrorToRaise)
         {
             ExceptionNumber = Interlocked.Increment(ref ExceptionCount);
-            _ctx = ctx;
             CausingErrorClass = causingErrorClass;
             AutoRollbackAttempt = autoRollbackAttempt;
             RetryTransaction = retryTransaction;

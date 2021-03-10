@@ -45,7 +45,7 @@ namespace Couchbase.Transactions.Cleanup
             _logger.LogDebug("Cleaner.{creator}: Processing cleanup request: {req}", _creatorName, cleanupRequest);
             try
             {
-                // TODO: ForwardCompatibilityCheck()
+                await Forwards.ForwardCompatibility.Check(null, Forwards.ForwardCompatibility.CleanupEntry, cleanupRequest.ForwardCompatibility).CAF();
                 await CleanupDocs(cleanupRequest).CAF();
                 await CleanupAtrEntry(cleanupRequest).CAF();
                 return new TransactionCleanupAttempt(
