@@ -1132,7 +1132,7 @@ namespace Couchbase.Transactions
                 Logger?.LogDebug($"[{AttemptId}] rolling back staged insert for {sm.Doc.FullyQualifiedId}");
                 try
                 {
-                    ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_DELETE_INSERTED);
+                    ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_DELETE_INSERTED, sm.Doc.Id);
                     await _testHooks.BeforeRollbackDeleteInserted(this, sm.Doc.Id).CAF();
                     await _docs.ClearTransactionMetadata(sm.Doc.Collection, sm.Doc.Id, sm.Doc.Cas, true).CAF();
                     await _testHooks.AfterRollbackDeleteInserted(this, sm.Doc.Id).CAF();
@@ -1169,7 +1169,7 @@ namespace Couchbase.Transactions
             {
                 try
                 {
-                    ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ROLLBACK_DOC);
+                    ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ROLLBACK_DOC, sm.Doc.Id);
                     await _testHooks.BeforeDocRolledBack(this, sm.Doc.Id).CAF();
                     await _docs.ClearTransactionMetadata(sm.Doc.Collection, sm.Doc.Id, sm.Doc.Cas, sm.Doc.IsDeleted);
                     await _testHooks.AfterRollbackReplaceOrRemove(this, sm.Doc.Id).CAF();
@@ -1272,19 +1272,27 @@ namespace Couchbase.Transactions
 
         internal bool HasExpiredClientSide(string? docId, [CallerMemberName] string hookPoint = "")
         {
-            var over = _overallContext.IsExpired;
-            var hook = _testHooks.HasExpiredClientSideHook(this, hookPoint, docId);
-            if (over)
+            try
             {
-                Logger?.LogInformation($"expired in stage {hookPoint} /{AttemptId}");
-            }
+                var over = _overallContext.IsExpired;
+                var hook = _testHooks.HasExpiredClientSideHook(this, hookPoint, docId);
+                if (over)
+                {
+                    Logger?.LogInformation($"expired in stage {hookPoint} /{AttemptId}");
+                }
 
-            if (hook)
+                if (hook)
+                {
+                    Logger?.LogInformation($"fake expiry in stage {hookPoint} / {AttemptId}");
+                }
+
+                return over || hook;
+            }
+            catch
             {
-                Logger?.LogInformation($"fake expiry in stage {hookPoint} / {AttemptId}");
+                Logger?.LogDebug("fake expiry due to throw in stage {hookPoint}", hookPoint);
+                throw;
             }
-
-            return over || hook;
         }
 
         // TODO: move this to a repository class

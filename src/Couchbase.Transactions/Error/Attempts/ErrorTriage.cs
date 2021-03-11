@@ -238,7 +238,6 @@ namespace Couchbase.Transactions.Error.Attempts
             {
                 FailAmbiguous => null, // retry after opRetryDelay
                 FailDocNotFound => Error(ec, err, rollback:false, raise: TransactionFailedPostCommit),
-                FailHard => Error(ec, err, rollback: false),
                 _ => Error(ec, err, rollback: false, raise: TransactionFailedPostCommit)
             };
 
