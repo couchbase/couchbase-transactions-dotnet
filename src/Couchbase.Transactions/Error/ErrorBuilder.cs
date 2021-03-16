@@ -54,6 +54,8 @@ namespace Couchbase.Transactions.Error
 
         public ErrorBuilder Cause(Exception cause)
         {
+            cause = cause ?? new Exception("UnknownCause");
+
             if (cause.StackTrace != null)
             {
                 _cause = cause;

@@ -262,7 +262,7 @@ namespace Couchbase.Transactions
                         }
 
                         _logger.LogWarning("Transaction is expired.  No more retries or rollbacks.");
-                        throw ErrorBuilder.CreateError(ctx, ErrorClass.FailExpiry, ex)
+                        throw ErrorBuilder.CreateError(ctx, ErrorClass.FailExpiry)
                             .DoNotRollbackAttempt()
                             .RaiseException(TransactionOperationFailedException.FinalError.TransactionExpired)
                             .Build();
