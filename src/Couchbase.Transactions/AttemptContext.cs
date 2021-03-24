@@ -63,6 +63,8 @@ namespace Couchbase.Transactions
         public string AttemptId { get; }
         public string TransactionId => _overallContext.TransactionId;
 
+        internal bool UnstagingComplete { get; private set; } = false;
+
         internal AttemptContext(TransactionContext overallContext,
             TransactionConfig config,
             string attemptId,
@@ -688,6 +690,7 @@ namespace Couchbase.Transactions
                 Logger?.LogDebug($"{nameof(SetAtrComplete)} for {Redactor.UserData(_atr.FullPath)} (attempt={AttemptId})");
                 await _testHooks.AfterAtrComplete(this).CAF();
                 _state = AttemptStates.COMPLETED;
+                UnstagingComplete = true;
             }
             catch (Exception ex)
             {
@@ -1476,7 +1479,7 @@ namespace Couchbase.Transactions
                 ReplacedIds: StagedReplaces.Select(sm => sm.AsDocRecord()).ToList(),
                 RemovedIds: StagedRemoves.Select(sm => sm.AsDocRecord()).ToList(),
                 State: _state,
-                WhenReadyToBeProcessed: _overallContext.AbsoluteExpiration,
+                WhenReadyToBeProcessed: DateTimeOffset.UtcNow, // EXT_REMOVE_COMPLETED
                 ProcessingErrors: new ConcurrentQueue<Exception>()
             );
 

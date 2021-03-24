@@ -67,7 +67,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             Assert.NotNull(result);
             Assert.True(getSucceeded);
             Assert.NotEqual(0, attempts);
-            Assert.NotInRange(result.Attempts.Count(), 0, 2);
         }
 
         [Fact]

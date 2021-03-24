@@ -18,10 +18,6 @@ namespace Couchbase.Transactions
 
         public string? TransactionId { get; internal set; }
 
-        public IEnumerable<TransactionAttempt> Attempts { get; internal set; } = Enumerable.Empty<TransactionAttempt>();
-
-        public MutationState? MutationState { get; internal set; }
-
         public bool UnstagingComplete { get; internal set; }
 
         public override string ToString()

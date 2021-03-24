@@ -26,6 +26,7 @@ namespace Couchbase.Transactions.Cleanup
         // TODO: This needs to be bounded, with a circuit breaker.
         private readonly BlockingCollection<CleanupRequest> _workQueue = new BlockingCollection<CleanupRequest>(MaxCleanupQueueDepth);
         private readonly Task _consumer;
+        private readonly ILogger<CleanupWorkQueue> _logger;
         private readonly Cleaner _cleaner;
 
         private ICleanupTestHooks _testHooks = DefaultCleanupTestHooks.Instance;
@@ -39,8 +40,11 @@ namespace Couchbase.Transactions.Cleanup
             }
         }
 
+        public int QueueLength => _workQueue.Count;
+
         public CleanupWorkQueue(ICluster cluster, TimeSpan? keyValueTimeout, ILoggerFactory loggerFactory, bool runCleanup)
         {
+            _logger = loggerFactory.CreateLogger<CleanupWorkQueue>();
             _cleaner = new Cleaner(cluster, keyValueTimeout, loggerFactory, creatorName: nameof(CleanupWorkQueue)) { TestHooks = TestHooks };
             _consumer = runCleanup ? Task.Run(ConsumeWork) : Task.CompletedTask;
         }
@@ -51,9 +55,11 @@ namespace Couchbase.Transactions.Cleanup
 
         private async Task ConsumeWork()
         {
+            _logger.LogDebug("{bg} Beginning background cleanup loop.", nameof(CleanupWorkQueue));
+
             // Initial, naive implementation.
             // Single-threaded consumer that assumes cleanupRequests are in order of transaction expiry already
-            foreach (var cleanupRequest in _workQueue.GetConsumingEnumerable())
+            foreach (var cleanupRequest in _workQueue.GetConsumingEnumerable(_forceFlush.Token))
             {
                 var delay = cleanupRequest.WhenReadyToBeProcessed - DateTimeOffset.UtcNow;
                 if (delay > TimeSpan.Zero && !_forceFlush.IsCancellationRequested)
@@ -77,20 +83,12 @@ namespace Couchbase.Transactions.Cleanup
                 }
                 catch (Exception ex)
                 {
-                    // TODO:  need a more intelligent error handling.
+                    // EXT_REMOVE_COMPLETED: Leave it for the lost cleanup process;  No retry.
                     cleanupRequest.ProcessingErrors.Enqueue(ex);
-                    if (cleanupRequest.ProcessingErrors.Count > 100)
-                    {
-                        // TODO: put it in a dead queue for special handling.
-                        // drop the request, for now
-                        return;
-                    }
-
-                    // retry in 10 seconds plus some jitter
-                    var updatedCleanupRequest = cleanupRequest with { WhenReadyToBeProcessed = DateTimeOffset.UtcNow.AddSeconds(10).AddMilliseconds(DateTime.UtcNow.Second) };
-                    TryAddCleanupRequest(updatedCleanupRequest);
                 }
             }
+
+            _logger.LogDebug("{bg} Exiting background cleanup loop.", nameof(CleanupWorkQueue));
         }
 
         /// <summary>

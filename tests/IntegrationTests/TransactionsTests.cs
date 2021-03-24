@@ -66,11 +66,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     Assert.Equal("bar", asJobj["foo"].Value<string>());
                 });
 
-                _outputHelper.WriteLine(string.Join(",", result.Attempts));
-                Assert.NotEmpty(result.Attempts);
-                Assert.Contains(result.Attempts, ta => ta.FinalState == AttemptStates.COMMITTED
-                                                       || ta.FinalState == AttemptStates.COMPLETED);
-
                 var postTxnGetResult = await defaultCollection.GetAsync(docId);
                 var postTxnDoc = postTxnGetResult.ContentAs<dynamic>();
                 Assert.Equal("100", postTxnDoc.revision.ToString());
@@ -120,10 +115,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     var replaceResult = await ctx.ReplaceAsync(getResult, docGet);
                 });
 
-                Assert.NotEmpty(result.Attempts);
-                _outputHelper.WriteLine(string.Join(",", result.Attempts));
-                Assert.Contains(result.Attempts, ta => ta.FinalState == AttemptStates.COMMITTED
-                || ta.FinalState == AttemptStates.COMPLETED);
+                Assert.True(result.UnstagingComplete);
 
                 var postTxnGetResult = await defaultCollection.GetAsync(docId);
                 var postTxnDoc = postTxnGetResult.ContentAs<dynamic>();
@@ -169,11 +161,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     replacedDoc.foo = "replaced_foo";
                     var secondReplaceResult = await ctx.ReplaceAsync(replaceResult, replacedDoc);
                 });
-
-                Assert.NotEmpty(result.Attempts);
-                _outputHelper.WriteLine(string.Join(",", result.Attempts));
-                Assert.Contains(result.Attempts, ta => ta.FinalState == AttemptStates.COMMITTED
-                || ta.FinalState == AttemptStates.COMPLETED);
 
                 var postTxnGetResult = await defaultCollection.GetAsync(docId);
                 var postTxnDoc = postTxnGetResult.ContentAs<JObject>();
@@ -221,11 +208,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     await ctx.RemoveAsync(getResult);
                 });
 
-                Assert.NotEmpty(result.Attempts);
-                _outputHelper.WriteLine(string.Join(",", result.Attempts));
-                Assert.Contains(result.Attempts, ta => ta.FinalState == AttemptStates.COMMITTED
-                                                       || ta.FinalState == AttemptStates.COMPLETED);
-
                 await Assert.ThrowsAsync<DocumentNotFoundException>(() => defaultCollection.GetAsync(docId));
                 removed = true;
             }
@@ -270,11 +252,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     await ctx.RollbackAsync();
                 });
 
-                Assert.NotEmpty(result.Attempts);
-                _outputHelper.WriteLine(string.Join(",", result.Attempts));
-                Assert.Contains(result.Attempts,
-                    ta => ta.FinalState == AttemptStates.ROLLED_BACK);
-
                 var postTxnGetResult = await defaultCollection.GetAsync(docId);
                 var postTxnDoc = postTxnGetResult.ContentAs<dynamic>();
                 Assert.Equal("100", postTxnDoc.revision.ToString());
@@ -313,10 +290,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
 
             var transactionFailedException = await Assert.ThrowsAsync<TransactionFailedException>(() => runTask);
             var result = transactionFailedException.Result;
-            Assert.NotEmpty(result.Attempts);
-            _outputHelper.WriteLine(string.Join(",", result.Attempts));
-            Assert.Contains(result.Attempts,
-                ta => ta.FinalState == AttemptStates.ROLLED_BACK);
+            Assert.False(result.UnstagingComplete);
 
             var postTxnGetTask = defaultCollection.GetAsync(docId);
             _ = await Assert.ThrowsAsync<DocumentNotFoundException>(() => postTxnGetTask);
@@ -409,10 +383,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     }
                 });
 
-                Assert.NotEmpty(result.Attempts);
-                _outputHelper.WriteLine(string.Join(",", result.Attempts));
-                Assert.Contains(result.Attempts, ta => ta.FinalState == AttemptStates.COMMITTED
-                                                       || ta.FinalState == AttemptStates.COMPLETED);
+                Assert.True(result.UnstagingComplete);
 
                 var postTxnGetResult = await defaultCollection.GetAsync(docId);
                 var postTxnDoc = postTxnGetResult.ContentAs<dynamic>();
@@ -469,8 +440,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
 
             var transactionFailedException = await Assert.ThrowsAsync<TransactionFailedException>(() => runTask);
             Assert.NotNull(transactionFailedException.Result);
-            Assert.NotEmpty(transactionFailedException.Result.Attempts);
-            Assert.NotInRange(transactionFailedException.Result.Attempts.Count(), 0, 2);
+            Assert.False(transactionFailedException.Result.UnstagingComplete);
         }
 
         [Fact]
@@ -490,7 +460,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
 
             var transactionFailedException = await Assert.ThrowsAsync<TransactionFailedException>(() => runTask);
             Assert.NotNull(transactionFailedException.Result);
-            Assert.NotEmpty(transactionFailedException.Result.Attempts);
+            Assert.False(transactionFailedException.Result.UnstagingComplete);
         }
 
 
@@ -555,11 +525,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 Assert.NotNull(documentLookupResult?.StagedContent?.ContentAs<object>());
                 _outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
             });
-
-            Assert.NotEmpty(result.Attempts);
-            _outputHelper.WriteLine(string.Join(",", result.Attempts));
-            ////await txn.DisposeAsync();
-
         }
 
         [Fact]

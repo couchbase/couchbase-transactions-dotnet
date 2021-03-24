@@ -103,8 +103,17 @@ namespace Couchbase.Transactions.Cleanup
 
                 specs.Add(MutateInSpec.Remove(prefix, isXattr: true));
 
-                await cleanupRequest.AtrCollection.MutateInAsync(cleanupRequest.AtrId, specs,
+                var mutateResult = await cleanupRequest.AtrCollection.MutateInAsync(cleanupRequest.AtrId, specs,
                     opts => opts.Timeout(_keyValueTimeout));
+
+                if (mutateResult?.MutationToken.SequenceNumber != 0)
+                {
+                    _logger.LogInformation("Attempt {attemptId}: ATR {atr} cleaned up.", cleanupRequest.AttemptId, cleanupRequest.AtrId);
+                }
+                else
+                {
+                    _logger.LogWarning("Attempt {attemptId}: ATR {atr} cleanup failed on MutateIn.", cleanupRequest.AttemptId, cleanupRequest.AtrId);
+                }
             }
             catch (Exception ex)
             {

@@ -48,6 +48,7 @@ namespace Couchbase.Transactions
         internal ITestHooks TestHooks { get; set; } = DefaultTestHooks.Instance;
         internal IDocumentRepository? DocumentRepository { get; set; } = null;
         internal IAtrRepository? AtrRepository { get; set; } = null;
+        internal int? CleanupQueueLength => Config.CleanupClientAttempts ?_cleanupWorkQueue?.QueueLength : null;
 
         internal ICleanupTestHooks CleanupTestHooks
         {
@@ -115,9 +116,6 @@ namespace Couchbase.Transactions
                 );
 
             var result = new TransactionResult() { TransactionId =  overallContext.TransactionId };
-            var attempts = new List<TransactionAttempt>();
-            result.Attempts = attempts;
-
             var opRetryBackoffMillisecond = 1;
             var randomJitter = new Random();
 
@@ -125,7 +123,7 @@ namespace Couchbase.Transactions
             {
                 try
                 {
-                    await ExecuteApplicationLambda(transactionLogic, overallContext, loggerFactory, attempts).CAF();
+                    await ExecuteApplicationLambda(transactionLogic, overallContext, loggerFactory, result).CAF();
                     return result;
                 }
                 catch (TransactionOperationFailedException ex)
@@ -181,11 +179,8 @@ namespace Couchbase.Transactions
             throw new InvalidOperationException("Loop should not have exited without expiration.");
         }
 
-        private async Task ExecuteApplicationLambda(Func<AttemptContext, Task> transactionLogic, TransactionContext overallContext, ILoggerFactory? loggerFactory,
-            List<TransactionAttempt> attempts)
+        private async Task ExecuteApplicationLambda(Func<AttemptContext, Task> transactionLogic, TransactionContext overallContext, ILoggerFactory? loggerFactory, TransactionResult result)
         {
-
-            var attemptWatch = Stopwatch.StartNew();
             var ctx = new AttemptContext(
                 overallContext,
                 Config,
@@ -203,9 +198,6 @@ namespace Couchbase.Transactions
                 {
                     await transactionLogic(ctx).CAF();
                     await ctx.AutoCommit().CAF();
-                    var attempt = ctx.ToAttempt();
-                    attempt.TimeTaken = attemptWatch.Elapsed;
-                    attempts.Add(attempt);
                 }
                 catch (TransactionOperationFailedException ex)
                 {
@@ -230,53 +222,40 @@ namespace Couchbase.Transactions
             catch (TransactionOperationFailedException ex)
             {
                 // If err.rollback is true (it generally will be), auto-rollback the attempt by calling rollbackInternal with appRollback=false.
-                try
+                if (ex.AutoRollbackAttempt)
                 {
-                    if (ex.AutoRollbackAttempt)
+                    try
                     {
-                        try
-                        {
-                            _logger.LogWarning("Attempt failed, attempting automatic rollback...");
-                            await ctx.RollbackInternal(isAppRollback: false).CAF();
-                        }
-                        catch (Exception rollbackEx)
-                        {
-                            _logger.LogWarning("Rollback failed due to {reason}", rollbackEx.Message);
-                            // if rollback failed, raise the original error, but with retry disabled:
-                            // Error(ec = err.ec, cause = err.cause, raise = err.raise
-                            throw ErrorBuilder.CreateError(ctx, ex.CausingErrorClass)
-                                .Cause(ex.Cause)
-                                .DoNotRollbackAttempt()
-                                .RaiseException(ex.FinalErrorToRaise)
-                                .Build();
-                        }
+                        _logger.LogWarning("Attempt failed, attempting automatic rollback...");
+                        await ctx.RollbackInternal(isAppRollback: false).CAF();
                     }
-
-                    // If the transaction has expired, raised Error(ec = FAIL_EXPIRY, rollback=false, raise = TRANSACTION_EXPIRED)
-                    if (overallContext.IsExpired)
+                    catch (Exception rollbackEx)
                     {
-                        if (ex.CausingErrorClass == ErrorClass.FailExpiry)
-                        {
-                            // already FailExpiry
-                            throw;
-                        }
-
-                        _logger.LogWarning("Transaction is expired.  No more retries or rollbacks.");
-                        throw ErrorBuilder.CreateError(ctx, ErrorClass.FailExpiry)
+                        _logger.LogWarning("Rollback failed due to {reason}", rollbackEx.Message);
+                        // if rollback failed, raise the original error, but with retry disabled:
+                        // Error(ec = err.ec, cause = err.cause, raise = err.raise
+                        throw ErrorBuilder.CreateError(ctx, ex.CausingErrorClass)
+                            .Cause(ex.Cause)
                             .DoNotRollbackAttempt()
-                            .RaiseException(TransactionOperationFailedException.FinalError.TransactionExpired)
+                            .RaiseException(ex.FinalErrorToRaise)
                             .Build();
                     }
                 }
-                finally
+
+                // If the transaction has expired, raised Error(ec = FAIL_EXPIRY, rollback=false, raise = TRANSACTION_EXPIRED)
+                if (overallContext.IsExpired)
                 {
-                    // Whether this fails or succeeds
-                    //  Add a TransactionAttempt that will be returned in the final TransactionResult.
-                    //  AddCleanupRequest, if the cleanup thread is configured to be running.
-                    var errAttempt = ctx.ToAttempt();
-                    errAttempt.TerminatedByException = ex;
-                    errAttempt.TimeTaken = attemptWatch.Elapsed;
-                    attempts.Add(errAttempt);
+                    if (ex.CausingErrorClass == ErrorClass.FailExpiry)
+                    {
+                        // already FailExpiry
+                        throw;
+                    }
+
+                    _logger.LogWarning("Transaction is expired.  No more retries or rollbacks.");
+                    throw ErrorBuilder.CreateError(ctx, ErrorClass.FailExpiry)
+                        .DoNotRollbackAttempt()
+                        .RaiseException(TransactionOperationFailedException.FinalError.TransactionExpired)
+                        .Build();
                 }
 
                 // Else if it succeeded or no rollback was performed, propagate err up.
@@ -285,6 +264,7 @@ namespace Couchbase.Transactions
             }
             finally
             {
+                result.UnstagingComplete = ctx.UnstagingComplete;
                 if (Config.CleanupClientAttempts)
                 {
                     AddCleanupRequest(ctx);
@@ -297,7 +277,7 @@ namespace Couchbase.Transactions
             var cleanupRequest = ctx.GetCleanupRequest();
             if (cleanupRequest != null)
             {
-                if (_cleanupWorkQueue.TryAddCleanupRequest(cleanupRequest) == false)
+                if (!_cleanupWorkQueue.TryAddCleanupRequest(cleanupRequest))
                 {
                     _logger.LogWarning("Failed to add background cleanup request: {req}", cleanupRequest);
                 }
