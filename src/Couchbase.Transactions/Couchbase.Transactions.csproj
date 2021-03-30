@@ -32,10 +32,6 @@
     <Compile Remove="old\**" />
     <EmbeddedResource Remove="old\**" />
     <None Remove="old\**" />
-    <None Include="..\..\LICENSE.md">
-      <Pack>True</Pack>
-      <PackagePath></PackagePath>
-    </None>
     <None Include="couchbase-icon.png">
       <Pack>True</Pack>
       <PackagePath></PackagePath>
