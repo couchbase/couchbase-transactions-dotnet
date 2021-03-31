@@ -7,6 +7,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Couchbase.Transactions.Config
 {
+    /// <summary>
+    /// A class for configuring transactions options.
+    /// </summary>
     public class TransactionConfigBuilder
     {
         private readonly TransactionConfig _config;
@@ -15,46 +18,91 @@ namespace Couchbase.Transactions.Config
         {
             _config = new TransactionConfig();
         }
+
+        /// <summary>
+        /// Create an instance of the config.
+        /// </summary>
+        /// <returns>An instance of the <see cref="TransactionConfigBuilder"/>.</returns>
         public static TransactionConfigBuilder Create() => new TransactionConfigBuilder();
 
+        /// <summary>
+        /// Set the <see cref="TransactionConfig.ExpirationTime"/> value.
+        /// </summary>
+        /// <param name="expirationTime">The maximum time that transactions created by this Transactions object can run for, before expiring.</param>
+        /// <returns>The builder.</returns>
         public TransactionConfigBuilder ExpirationTime(TimeSpan expirationTime)
         {
             _config.ExpirationTime = expirationTime;
             return this;
         }
 
+        /// <summary>
+        /// The writes of all transactions created by this object will be performed with this durability setting.
+        /// </summary>
+        /// <param name="durabilityLevel">A value from the <see cref="DurabilityLevel(KeyValue.DurabilityLevel)"/> enum.</param>
+        /// <returns>The builder.</returns>
         public TransactionConfigBuilder DurabilityLevel(DurabilityLevel durabilityLevel)
         {
             _config.DurabilityLevel = durabilityLevel;
             return this;
         }
 
+        /// <summary>
+        /// Set the default timeout used for all KV writes.
+        /// </summary>
+        /// <param name="keyValueTimeout">The default timeout used for all KV writes.</param>
+        /// <returns>The builder.</returns>
         public TransactionConfigBuilder KeyValueTimeout(TimeSpan keyValueTimeout)
         {
             _config.KeyValueTimeout = keyValueTimeout;
             return this;
         }
 
+        /// <summary>
+        /// Each client that has cleanupLostAttempts(true) enabled, will be participating in the distributed cleanup process.
+        /// This involves checking all ATRs every cleanup window, and this parameter controls the length of that window.
+        /// </summary>
+        /// <param name="cleanupWindow">The length of the cleanup window.</param>
+        /// <returns>The builder.</returns>
         public TransactionConfigBuilder CleanupWindow(TimeSpan cleanupWindow)
         {
             _config.CleanupWindow = cleanupWindow;
             return this;
         }
 
+        /// <summary>
+        /// Controls where any transaction attempts made by this client are automatically removed.
+        /// </summary>
+        /// <param name="cleanupClientAttempts">Whether to cleanup attempts made by this client.</param>
+        /// <returns>The builder.</returns>
         public TransactionConfigBuilder CleanupClientAttempts(bool cleanupClientAttempts)
         {
             _config.CleanupClientAttempts = cleanupClientAttempts;
             return this;
         }
 
+        /// <summary>
+        /// Controls where a background process is created to cleanup any 'lost' transaction attempts.
+        /// </summary>
+        /// <param name="cleanupLostAttempts">Whether to cleanup lost attempts from other clients.</param>
+        /// <returns>The builder.</returns>
         public TransactionConfigBuilder CleanupLostAttempts(bool cleanupLostAttempts)
         {
             _config.CleanupLostAttempts = cleanupLostAttempts;
             return this;
         }
 
+        /// <summary>
+        /// Generate a <see cref="TransactionConfig"/> from the values provided.
+        /// </summary>
+        /// <returns>A <see cref="TransactionConfig"/> that has been initialized with the given values.</returns>
         public TransactionConfig Build() => _config;
 
+        /// <summary>
+        /// The <see cref="Microsoft.Extensions.Logging.ILoggerFactory"/> to be used for logging in the Transactions internals.
+        /// </summary>
+        /// <param name="loggerFactory">The logger factory.</param>
+        /// <returns>The builder.</returns>
         public TransactionConfigBuilder LoggerFactory(ILoggerFactory loggerFactory)
         {
             _config.LoggerFactory = loggerFactory;

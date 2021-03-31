@@ -1,14 +1,8 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Transactions;
-using Couchbase.Core.Exceptions;
-using Couchbase.Core.IO.Transcoders;
 using Couchbase.Core.Logging;
 using Couchbase.Core.Retry;
 using Couchbase.Transactions.Cleanup;
@@ -17,17 +11,20 @@ using Couchbase.Transactions.Config;
 using Couchbase.Transactions.DataAccess;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Error.External;
-using Couchbase.Transactions.Error.Internal;
-using Couchbase.Transactions.Internal;
 using Couchbase.Transactions.Internal.Test;
-using Couchbase.Transactions.Log;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Couchbase.Transactions
 {
+    /// <summary>
+    /// A class for running transactional operations against a Couchbase Cluster.
+    /// </summary>
     public class Transactions : IDisposable, IAsyncDisposable
     {
+        /// <summary>
+        /// A standard delay between retried operations.
+        /// </summary>
         public static readonly TimeSpan OpRetryDelay = TimeSpan.FromMilliseconds(3);
         private static long InstancesCreated = 0;
         private static long InstancesCreatedDoingBackgroundCleanup = 0;
@@ -40,8 +37,10 @@ namespace Couchbase.Transactions
         private readonly Cleaner _cleaner;
         private readonly IAsyncDisposable? _lostTransactionsCleanup;
 
+        /// <summary>
+        /// Gets the <see cref="TransactionConfig"/> to apply to all transaction runs from this instance.
+        /// </summary>
         public TransactionConfig Config { get; }
-        public string TransactionId { get; } = Guid.NewGuid().ToString();
 
         internal ICluster Cluster => _cluster;
 
@@ -94,16 +93,47 @@ namespace Couchbase.Transactions
             // TODO: whatever the equivalent of 'cluster.environment().eventBus().publish(new TransactionsStarted(config));' is.
         }
 
+        /// <summary>
+        /// Create a <see cref="Transactions"/> instance for running transactions against the specified <see cref="ICluster">Cluster</see>.
+        /// </summary>
+        /// <param name="cluster">The cluster where your documents will be located.</param>
+        /// <returns>A <see cref="Transactions"/> instance.</returns>
+        /// <remarks>The instance returned from this method should be kept for the lifetime of your application and used like a singleton per Couchbase cluster you will be accessing.</remarks>
         public static Transactions Create(ICluster cluster) => Create(cluster, TransactionConfigBuilder.Create().Build());
+
+        /// <summary>
+        /// Create a <see cref="Transactions"/> instance for running transactions against the specified <see cref="ICluster">Cluster</see>.
+        /// </summary>
+        /// <param name="cluster">The cluster where your documents will be located.</param>
+        /// <param name="config">The <see cref="TransactionConfig"/> to use for all transactions against this cluster.</param>
+        /// <returns>A <see cref="Transactions"/> instance.</returns>
+        /// <remarks>The instance returned from this method should be kept for the lifetime of your application and used like a singleton per Couchbase cluster you will be accessing.</remarks>
         public static Transactions Create(ICluster cluster, TransactionConfig config) => new Transactions(cluster, config);
 
+        /// <summary>
+        /// Create a <see cref="Transactions"/> instance for running transactions against the specified <see cref="ICluster">Cluster</see>.
+        /// </summary>
+        /// <param name="cluster">The cluster where your documents will be located.</param>
+        /// <param name="config">The <see cref="TransactionConfigBuilder"/> to generate a <see cref="TransactionConfig"/> to use for all transactions against this cluster.</param>
+        /// <returns>A <see cref="Transactions"/> instance.</returns>
+        /// <remarks>The instance returned from this method should be kept for the lifetime of your application and used like a singleton per Couchbase cluster you will be accessing.</remarks>
         public static Transactions Create(ICluster cluster, TransactionConfigBuilder configBuilder) =>
             Create(cluster, configBuilder.Build());
 
-
+        /// <summary>
+        /// Run a transaction agains the cluster.
+        /// </summary>
+        /// <param name="transactionLogic">A func representing the transaction logic. All data operations should use the methods on the <see cref="AttemptContext"/> provided.  Do not mix and match non-transactional data operations.</param>
+        /// <returns>The result of the transaction.</returns>
         public Task<TransactionResult> RunAsync(Func<AttemptContext, Task> transactionLogic) =>
             RunAsync(transactionLogic, PerTransactionConfigBuilder.Create().Build());
 
+        /// <summary>
+        /// Run a transaction agains the cluster.
+        /// </summary>
+        /// <param name="transactionLogic">A func representing the transaction logic. All data operations should use the methods on the <see cref="AttemptContext"/> provided.  Do not mix and match non-transactional data operations.</param>
+        /// <param name="perConfig">A config with values unique to this specific transaction.</param>
+        /// <returns>The result of the transaction.</returns>
         public async Task<TransactionResult> RunAsync(Func<AttemptContext, Task> transactionLogic, PerTransactionConfig perConfig)
         {
             // https://hackmd.io/foGjnSSIQmqfks2lXwNp8w?view#The-Core-Loop
@@ -199,7 +229,7 @@ namespace Couchbase.Transactions
                     await transactionLogic(ctx).CAF();
                     await ctx.AutoCommit().CAF();
                 }
-                catch (TransactionOperationFailedException ex)
+                catch (TransactionOperationFailedException)
                 {
                     // already a classified error
                     throw;

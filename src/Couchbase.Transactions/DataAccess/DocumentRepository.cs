@@ -61,15 +61,8 @@ namespace Couchbase.Transactions.DataAccess
                 opts.AccessDeleted(true);
             }
 
-            try
-            {
-                var updatedDoc = await doc.Collection.MutateInAsync(doc.Id, specs, opts).CAF();
-                return (updatedDoc.Cas, updatedDoc.MutationToken);
-            }
-            catch (Couchbase.Core.Exceptions.InvalidArgumentException ex)
-            {
-                throw;
-            }
+            var updatedDoc = await doc.Collection.MutateInAsync(doc.Id, specs, opts).CAF();
+            return (updatedDoc.Cas, updatedDoc.MutationToken);
         }
 
         public async Task<(ulong updatedCas, MutationToken mutationToken)> MutateStagedRemove(TransactionGetResult doc, IAtrRepository atr)
@@ -164,7 +157,7 @@ namespace Couchbase.Transactions.DataAccess
             {
                 lookupInResult = await collection.LookupInAsync(docId, specs, opts).CAF();
             }
-            catch (PathInvalidException pathInvalid)
+            catch (PathInvalidException)
             {
                 throw;
             }

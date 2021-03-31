@@ -55,6 +55,20 @@ namespace Couchbase.Transactions.Error
                 return ErrorClass.FailDocAlreadyExists;
             }
 
+            if (ex is PathInvalidException pathInvalid)
+            {
+                switch (pathInvalid.SubDocumentStatus)
+                {
+                    case Core.IO.Operations.ResponseStatus.SubDocPathExists:
+                        return ErrorClass.FailPathAlreadyExists;
+                    case Core.IO.Operations.ResponseStatus.SubdocMultiPathFailureDeleted:
+                    case Core.IO.Operations.ResponseStatus.SubDocPathNotFound:
+                        return ErrorClass.FailPathNotFound;
+                    default:
+                        return ErrorClass.FailOther;
+                }
+            }
+
             if (ex is PathExistsException)
             {
                 return ErrorClass.FailPathAlreadyExists;

@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Couchbase.Core.Exceptions.KeyValue;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Components;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.DataModel;
+using Couchbase.Transactions.Error.External;
 using Couchbase.Transactions.Support;
 using Newtonsoft.Json.Linq;
 
@@ -142,22 +144,16 @@ namespace Couchbase.Transactions.DataAccess
                 MutateInSpec.Insert(_prefixedAtrFieldTransactionId,
                     _overallContext.TransactionId, createPath: true, isXattr: true),
                 MutateInSpec.Insert(_prefixedAtrFieldStatus,
-                            AttemptStates.PENDING.ToString(), createPath: false, isXattr: true),
+                            AttemptStates.PENDING.ToString(), isXattr: true),
                 MutateInSpec.Insert(_prefixedAtrFieldStartTimestamp, MutationMacro.Cas),
                 MutateInSpec.Insert(_prefixedAtrFieldExpiresAfterMsecs, exp,
                             createPath: false, isXattr: true),
             };
 
-            var dbg = await Collection.MutateInAsync(AtrId, specs,
+            _ = await Collection.MutateInAsync(AtrId, specs,
                 opts => opts.StoreSemantics(StoreSemantics.Upsert)
                             .Durability(_atrDurability)
-            ).CAF();
-
-            // HACK!  Temporary workaround for NCBC-2831
-            if (dbg.MutationToken.VBucketId == 0)
-            {
-                throw new Core.Exceptions.KeyValue.PathExistsException();
-            }
+                ).CAF();
         }
 
         public async Task MutateAtrCommit(IEnumerable<StagedMutation> stagedMutations)
@@ -190,21 +186,15 @@ namespace Couchbase.Transactions.DataAccess
 
             var specs = new MutateInSpec[]
             {
-                MutateInSpec.Upsert(_prefixedAtrFieldStatus,
-                    AttemptStates.ABORTED.ToString(), isXattr: true, createPath: true),
-                MutateInSpec.Upsert(_prefixedAtrFieldTimestampRollbackStart,
-                    MutationMacro.Cas, isXattr: true, createPath: true),
-                MutateInSpec.Upsert(_prefixedAtrFieldDocsInserted, inserts,
-                    isXattr: true, createPath: true),
-                MutateInSpec.Upsert(_prefixedAtrFieldDocsReplaced, replaces,
-                    isXattr: true, createPath: true),
-                MutateInSpec.Upsert(_prefixedAtrFieldDocsRemoved, removes,
-                    isXattr: true, createPath: true),
+                MutateInSpec.Upsert(_prefixedAtrFieldStatus, AttemptStates.ABORTED.ToString(), isXattr: true),
+                MutateInSpec.Upsert(_prefixedAtrFieldTimestampRollbackStart, MutationMacro.Cas, isXattr: true),
+                MutateInSpec.Upsert(_prefixedAtrFieldDocsInserted, inserts, isXattr: true),
+                MutateInSpec.Upsert(_prefixedAtrFieldDocsReplaced, replaces, isXattr: true),
+                MutateInSpec.Upsert(_prefixedAtrFieldDocsRemoved, removes, isXattr: true),
             };
 
             _ = await Collection.MutateInAsync(AtrId, specs,
-                opts => opts.StoreSemantics(StoreSemantics.Replace).AccessDeleted(true).CreateAsDeleted(true)
-                            .Durability(_atrDurability)).CAF();
+                opts => opts.StoreSemantics(StoreSemantics.Replace).Durability(_atrDurability)).CAF();
         }
 
         public async Task MutateAtrRolledBack()

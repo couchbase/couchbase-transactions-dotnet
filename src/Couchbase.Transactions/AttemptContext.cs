@@ -91,6 +91,13 @@ namespace Couchbase.Transactions
 
         public ILogger<AttemptContext>? Logger { get; }
 
+        /// <summary>
+        /// Gets a document.
+        /// </summary>
+        /// <param name="collection">The collection to look up the document in.</param>
+        /// <param name="id">The ID of the document.</param>
+        /// <returns>A <see cref="TransactionGetResult"/> containing the document.</returns>
+        /// <exception cref="DocumentNotFoundException">If the document does not exist.</exception>
         public async Task<TransactionGetResult> GetAsync(ICouchbaseCollection collection, string id)
         {
             var getResult = await GetOptionalAsync(collection, id).CAF();
@@ -102,6 +109,12 @@ namespace Couchbase.Transactions
             return getResult;
         }
 
+        /// <summary>
+        /// Gets a document or null.
+        /// </summary>
+        /// <param name="collection">The collection to look up the document in.</param>
+        /// <param name="id">The ID of the document.</param>
+        /// <returns>A <see cref="TransactionGetResult"/> containing the document, or null if  not found.</returns>
         public async Task<TransactionGetResult?> GetOptionalAsync(ICouchbaseCollection collection, string id)
         {
             DoneCheck();
@@ -291,6 +304,12 @@ namespace Couchbase.Transactions
 
         private StagedMutation FindStaged(TransactionGetResult doc) => FindStaged(doc.Collection, doc.Id);
 
+        /// <summary>
+        /// Replace the content of a document previously fetched in this transaction with new content.
+        /// </summary>
+        /// <param name="doc">The <see cref="TransactionGetResult"/> of a document previously looked up in this transaction.</param>
+        /// <param name="content">The updated content.</param>
+        /// <returns>A <see cref="TransactionGetResult"/> reflecting the updated content.</returns>
         public async Task<TransactionGetResult> ReplaceAsync(TransactionGetResult doc, object content)
         {
             DoneCheck();
@@ -375,6 +394,13 @@ namespace Couchbase.Transactions
             }
         }
 
+        /// <summary>
+        /// Insert a document.
+        /// </summary>
+        /// <param name="collection">The collection to insert the document into.</param>
+        /// <param name="id">The ID of the new document.</param>
+        /// <param name="content">The content of the new document.</param>
+        /// <returns>A <see cref="TransactionGetResult"/> representing the inserted document.</returns>
         public async Task<TransactionGetResult> InsertAsync(ICouchbaseCollection collection, string id, object content)
         {
             DoneCheck();
@@ -459,15 +485,15 @@ namespace Couchbase.Transactions
                                         await ForwardCompatibility.Check(this, ForwardCompatibility.WriteWriteConflictInsertingGet, docWithMeta?.TransactionXattrs?.ForwardCompatibility);
 
                                         var docInATransaction =
-                                            docWithMeta.TransactionXattrs?.Id?.Transactionid != null;
-                                        isTombstone = docWithMeta.IsDeleted;
+                                            docWithMeta?.TransactionXattrs?.Id?.Transactionid != null;
+                                        isTombstone = docWithMeta?.IsDeleted == true;
 
-                                        if (docWithMeta.IsDeleted && !docInATransaction)
+                                        if (isTombstone && !docInATransaction)
                                         {
                                             // If the doc is a tombstone and not in any transaction
                                             // -> It’s ok to go ahead and overwrite.
                                             // Perform this algorithm (createStagedInsert) from the top with cas=the cas from the get.
-                                            cas = docWithMeta.Cas;
+                                            cas = docWithMeta!.Cas;
 
                                             // (innerRepeat, createStagedInsertRepeat)
                                             return (RepeatAction.NoRepeat, RepeatAction.RepeatNoDelay);
@@ -485,7 +511,7 @@ namespace Couchbase.Transactions
                                         else
                                         {
                                             // Else call the CheckWriteWriteConflict logic, which conveniently does everything we need to handle the above cases.
-                                            var getResult = docWithMeta.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnOther);
+                                            var getResult = docWithMeta!.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnOther);
                                             await CheckWriteWriteConflict(getResult, ForwardCompatibility.WriteWriteConflictInserting).CAF();
 
                                             // If this logic succeeds, we are ok to overwrite the doc.
@@ -575,6 +601,11 @@ namespace Couchbase.Transactions
             }
         }
 
+        /// <summary>
+        /// Remove a document previously looked up in this transaction.
+        /// </summary>
+        /// <param name="doc">The <see cref="TransactionGetResult"/> of a document previously looked up in this transaction.</param>
+        /// <returns>A task representing the asynchronous work.</returns>
         public async Task RemoveAsync(TransactionGetResult doc)
         {
             DoneCheck();
@@ -801,7 +832,6 @@ namespace Couchbase.Transactions
                     }
 
                     await _testHooks.BeforeDocCommitted(this, sm.Doc.Id).CAF();
-                    IMutationResult mutateResult;
                     (ulong updatedCas, MutationToken mutationToken) = await _docs.UnstageInsertOrReplace(sm.Doc.Collection, sm.Doc.Id, cas, content, insertMode).CAF();
                     Logger?.LogInformation(
                         $"Unstaged mutation successfully on {Redactor.UserData(sm.Doc.FullyQualifiedId)}, attempt={AttemptId}, insertMode={insertMode}, ambiguityResolutionMode={ambiguityResolutionMode}, preCas={cas}, postCas={updatedCas}");
@@ -811,7 +841,10 @@ namespace Couchbase.Transactions
                         _finalMutations.Add(mutationToken);
                     }
 
-                    await _testHooks.AfterDocCommittedBeforeSavingCas(this, sm.Doc.Id);
+                    await _testHooks.AfterDocCommittedBeforeSavingCas(this, sm.Doc.Id).CAF();
+
+                    sm.Doc.Cas = updatedCas;
+                    await _testHooks.AfterDocCommitted(this, sm.Doc.Id).CAF();
 
                     return RepeatAction.NoRepeat;
                 }
@@ -1055,6 +1088,11 @@ namespace Couchbase.Transactions
             });
         }
 
+        /// <summary>
+        /// Rollback the transaction, explicitly.
+        /// </summary>
+        /// <returns>A task representing the asynchronous work.</returns>
+        /// <remarks>Calling this method on AttemptContext is usually unnecessary, as unhandled exceptions will trigger a rollback automatically.</remarks>
         public Task RollbackAsync() => this.RollbackInternal(true);
 
         internal TransactionAttempt ToAttempt()
@@ -1132,12 +1170,13 @@ namespace Couchbase.Transactions
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#RollbackAsync-Staged-InsertAsync
             await RepeatUntilSuccessOrThrow(async () =>
             {
-                Logger?.LogDebug($"[{AttemptId}] rolling back staged insert for {sm.Doc.FullyQualifiedId}");
+                Logger.LogDebug($"[{AttemptId}] rolling back staged insert for {sm.Doc.FullyQualifiedId}");
                 try
                 {
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_DELETE_INSERTED, sm.Doc.Id);
                     await _testHooks.BeforeRollbackDeleteInserted(this, sm.Doc.Id).CAF();
                     await _docs.ClearTransactionMetadata(sm.Doc.Collection, sm.Doc.Id, sm.Doc.Cas, true).CAF();
+                    Logger.LogDebug("Rolled back staged {type} for {id}", sm.Type, sm.Doc.Id);
                     await _testHooks.AfterRollbackDeleteInserted(this, sm.Doc.Id).CAF();
                     return RepeatAction.NoRepeat;
                 }
@@ -1170,11 +1209,13 @@ namespace Couchbase.Transactions
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#RollbackAsync-Staged-ReplaceAsync-or-RemoveAsync
             await RepeatUntilSuccessOrThrow(async () =>
             {
+                Logger.LogDebug($"[{AttemptId}] rolling back staged replace or remove for {sm.Doc.FullyQualifiedId}");
                 try
                 {
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ROLLBACK_DOC, sm.Doc.Id);
                     await _testHooks.BeforeDocRolledBack(this, sm.Doc.Id).CAF();
                     await _docs.ClearTransactionMetadata(sm.Doc.Collection, sm.Doc.Id, sm.Doc.Cas, sm.Doc.IsDeleted);
+                    Logger.LogDebug("Rolled back staged {type} for {id}", sm.Type, sm.Doc.Id);
                     await _testHooks.AfterRollbackReplaceOrRemove(this, sm.Doc.Id).CAF();
                     return RepeatAction.NoRepeat;
                 }
@@ -1298,7 +1339,6 @@ namespace Couchbase.Transactions
             }
         }
 
-        // TODO: move this to a repository class
         internal async Task CheckWriteWriteConflict(TransactionGetResult gr, string interactionPoint)
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#CheckWriteWriteConflict

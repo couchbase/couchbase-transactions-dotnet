@@ -11,15 +11,22 @@ using Newtonsoft.Json.Linq;
 
 namespace Couchbase.Transactions
 {
+    /// <summary>
+    /// The result of a transaction.
+    /// </summary>
     public class TransactionResult
     {
-        [JsonIgnore]
-        public ILogger<Transactions>? Logger { get; internal set; }
-
+        /// <summary>
+        /// Gets the automatically-generated ID of this transaction.
+        /// </summary>
         public string? TransactionId { get; internal set; }
 
+        /// <summary>
+        /// Gets a value indicating whether the transaction completed to the point of unstaging its results, meaning it finished successfully.
+        /// </summary>
         public bool UnstagingComplete { get; internal set; }
 
+        /// <inheritdoc />
         public override string ToString()
         {
             return JObject.FromObject(this).ToString();

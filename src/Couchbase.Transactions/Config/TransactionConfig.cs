@@ -10,31 +10,81 @@ using Microsoft.Extensions.Logging;
 
 namespace Couchbase.Transactions.Config
 {
+    /// <summary>
+    /// The configuration to use for each transaction against a given cluster.
+    /// </summary>
     public class TransactionConfig
     {
+        /// <summary>
+        /// The default durability level.
+        /// </summary>
+        /// <seealso cref="TransactionConfig.DurabilityLevel"/>
         public const DurabilityLevel DefaultDurabilityLevel = DurabilityLevel.Majority;
+
+        /// <summary>
+        /// The default expiration, in milliseconds.
+        /// </summary>
+        /// <seealso cref="TransactionConfig.ExpirationTime"/>
         public const int DefaultExpirationMilliseconds = 15_000;
+
+        /// <summary>
+        /// The default cleanup window, in milliseconds.
+        /// </summary>
+        /// <seealso cref="TransactionConfig.CleanupWindow"/>
         public const int DefaultCleanupWindowMilliseconds = 60_000;
+
+        /// <summary>
+        /// The default value of <see cref="TransactionConfig.CleanupLostAttempts"/> (true).
+        /// </summary>
         public const bool DefaultCleanupLostAttempts = true;
+
+        /// <summary>
+        /// The default value of <see cref="CleanupClientAttempts"/> (true).
+        /// </summary>
         public const bool DefaultCleanupClientAttempts = true;
+
+        /// <summary>
+        /// The default log level for failures.
+        /// </summary>
         public const Severity DefaultLogOnFailure = Severity.Error;
 
+        /// <summary>
+        /// Gets a value indicating the time before a transaction expires and no more attempts will be made.
+        /// </summary>
         public TimeSpan ExpirationTime { get; internal set; }
+
+        /// <summary>
+        /// Gets a value indicating whether to run the background thread to clean up lost/abandoned transactions from other clients.
+        /// </summary>
         public bool CleanupLostAttempts { get; internal set; }
+
+        /// <summary>
+        /// Gets a value indicating whether to run the background thread to clean up failed attempts from this transactions instance.
+        /// </summary>
         public bool CleanupClientAttempts { get; internal set; }
+
+        /// <summary>
+        /// Gets a value indicating the period between runs of the cleanup thread.
+        /// </summary>
         public TimeSpan CleanupWindow { get; internal set; }
-        public bool LogDirectly => LogDirectlyLevel.HasValue;
-        public Severity? LogDirectlyLevel { get; internal set; }
-        public bool LogOnFailure => LogOnFailureLevel.HasValue;
-        public Severity? LogOnFailureLevel { get; internal set; }
+
+        /// <summary>
+        /// Gets a value indicating the timeout on Couchbase Key/Value operations.
+        /// </summary>
         public TimeSpan? KeyValueTimeout { get; internal set; }
+
+        /// <summary>
+        /// Gets a value for the minimum durability level to use for modification operations.
+        /// </summary>
         public DurabilityLevel DurabilityLevel { get; internal set; }
+
+        /// <summary>
+        /// Gets a <see cref="ILoggerFactory"/> that transactions will use for internal logging.
+        /// </summary>
         public ILoggerFactory? LoggerFactory { get; internal set; }
 
         internal TransactionConfig(
             DurabilityLevel durabilityLevel = DefaultDurabilityLevel,
-            Severity? logDirectly = null,
-            Severity? logOnFailure = DefaultLogOnFailure,
             TimeSpan? expirationTime = null,
             TimeSpan? cleanupWindow = null,
             TimeSpan? keyValueTimeout = null,
@@ -46,8 +96,6 @@ namespace Couchbase.Transactions.Config
             CleanupLostAttempts = cleanupLostAttempts;
             CleanupClientAttempts = cleanupClientAttempts;
             CleanupWindow = cleanupWindow ?? TimeSpan.FromMilliseconds(DefaultCleanupWindowMilliseconds);
-            LogDirectlyLevel = logDirectly;
-            LogOnFailureLevel = logOnFailure;
             KeyValueTimeout = keyValueTimeout;
             DurabilityLevel = durabilityLevel;
         }

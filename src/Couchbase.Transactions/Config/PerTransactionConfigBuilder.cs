@@ -5,6 +5,9 @@ using Couchbase.KeyValue;
 
 namespace Couchbase.Transactions.Config
 {
+    /// <summary>
+    /// A builder class for generating <see cref="PerTransactionConfig"/>s to be used for individual transactions.
+    /// </summary>
     public class PerTransactionConfigBuilder
     {
         private readonly PerTransactionConfig _config;
@@ -13,15 +16,28 @@ namespace Couchbase.Transactions.Config
         {
             _config = new PerTransactionConfig();
         }
-        
+
+        /// <summary>
+        /// Create an instance of the <see cref="PerTransactionConfigBuilder"/> class.
+        /// </summary>
+        /// <returns></returns>
         public static PerTransactionConfigBuilder Create() => new PerTransactionConfigBuilder();
 
+        /// <summary>
+        /// Set the minimum desired <see cref="DurabilityLevel(KeyValue.DurabilityLevel)"/>.
+        /// </summary>
+        /// <param name="durabilityLevel">The <see cref="DurabilityLevel(KeyValue.DurabilityLevel)"/> desired.</param>
+        /// <returns>The continued instance of this builder.</returns>
         public PerTransactionConfigBuilder DurabilityLevel(DurabilityLevel durabilityLevel)
         {
             _config.DurabilityLevel = durabilityLevel;
             return this;
         }
 
+        /// <summary>
+        /// Build a <see cref="PerTransactionConfig"/> from this builder.
+        /// </summary>
+        /// <returns>A completed config.</returns>
         public PerTransactionConfig Build() => _config;
     }
 }

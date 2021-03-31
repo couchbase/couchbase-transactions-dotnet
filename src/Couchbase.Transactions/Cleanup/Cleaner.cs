@@ -215,39 +215,31 @@ namespace Couchbase.Transactions.Cleanup
 
         public async Task CleanupDoc(DocRecord dr, bool requireCrc32ToMatchStaging, Func<DocumentLookupResult, Task> perDoc, string attemptId)
         {
-            try
-            {
-                await TestHooks.BeforeDocGet(dr.Id).CAF();
-                var collection = await dr.GetCollection(_cluster).CAF();
-                var docLookupResult = await DocumentRepository.LookupDocumentAsync(collection, dr.Id, _keyValueTimeout, fullDocument: false).CAF();
+            await TestHooks.BeforeDocGet(dr.Id).CAF();
+            var collection = await dr.GetCollection(_cluster).CAF();
+            var docLookupResult = await DocumentRepository.LookupDocumentAsync(collection, dr.Id, _keyValueTimeout, fullDocument: false).CAF();
 
-                if (docLookupResult.TransactionXattrs == null)
+            if (docLookupResult.TransactionXattrs == null)
+            {
+                return;
+            }
+
+            if (docLookupResult.TransactionXattrs.Id?.AttemptId != attemptId)
+            {
+                return;
+            }
+
+            if (requireCrc32ToMatchStaging && !string.IsNullOrEmpty(docLookupResult.DocumentMetadata?.Crc32c))
+            {
+                if (docLookupResult.DocumentMetadata?.Crc32c != docLookupResult.TransactionXattrs.Operation?.Crc32)
                 {
+                    // "the world has moved on", continue as success
                     return;
                 }
-
-                if (docLookupResult.TransactionXattrs.Id?.AttemptId != attemptId)
-                {
-                    return;
-                }
-
-                if (requireCrc32ToMatchStaging && !string.IsNullOrEmpty(docLookupResult.DocumentMetadata?.Crc32c))
-                {
-                    if (docLookupResult.DocumentMetadata?.Crc32c != docLookupResult.TransactionXattrs.Operation?.Crc32)
-                    {
-                        // "the world has moved on", continue as success
-                        return;
-                    }
-                }
-
-                // If we reach here, the document is unchanged from staging, and it's safe to proceed
-                await perDoc(docLookupResult).ConfigureAwait(false);
             }
-            catch (Exception ex)
-            {
-                // TODO: how to record cleanup failures? ...
-                throw;
-            }
+
+            // If we reach here, the document is unchanged from staging, and it's safe to proceed
+            await perDoc(docLookupResult).ConfigureAwait(false);
         }
     }
 }

@@ -253,7 +253,6 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
 
         private async Task CleanupAtr(string atrId, CancellationToken cancellationToken)
         {
-            _logger.LogDebug("{this} Cleaning up ATR {atrId}", this, atrId);
             Dictionary<string, AtrEntry> attempts;
             ParsedHLC parsedHlc;
             try

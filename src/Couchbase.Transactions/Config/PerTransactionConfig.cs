@@ -5,11 +5,17 @@ using Couchbase.KeyValue;
 
 namespace Couchbase.Transactions.Config
 {
+    /// <summary>
+    /// A class representing a config applied to a single transaction.
+    /// </summary>
     public class PerTransactionConfig
     {
         internal PerTransactionConfig()
         { }
 
+        /// <summary>
+        /// Gets an optional value indicating the minimum durability level desired.
+        /// </summary>
         public DurabilityLevel? DurabilityLevel { get; internal set; }
     }
 }
