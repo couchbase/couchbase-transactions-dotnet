@@ -126,7 +126,19 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                     }
                 }
 
-                var buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
+                Dictionary<string, Management.Buckets.BucketSettings> buckets;
+                try
+                {
+                    buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
+                }
+                catch (ArgumentNullException)
+                {
+                    _logger.LogWarning("GetAllBuckets failed due to ArgumentNullException.  Cluster not ready?");
+                    await _cluster.WaitUntilReadyAsync(TimeSpan.FromSeconds(30)).CAF();
+                    _logger.LogInformation("Cluster ready.  Retrying GetAllBuckets...");
+                    buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
+                }
+
                 foreach (var bkt in buckets)
                 {
                     var bucketName = bkt.Key;
