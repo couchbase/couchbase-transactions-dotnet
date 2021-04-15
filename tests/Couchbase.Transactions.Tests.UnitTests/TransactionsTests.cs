@@ -48,7 +48,7 @@ namespace Couchbase.Transactions.Tests.UnitTests
         {
             // After the data access was refactored into repository classes, the ICouchbaseCollection instances passed in shouldn't actually be accessed.
             // We verify this by using Mock with strict behavior and NotImplemented members.
-            // The test should run to the end without hitting any of the ICouchbaseCollection other than the names.
+            // The test should run to the end without hitting any of the ICouchbaseCollection other than the names and fetching the default collection on the bucket.
             using var cluster = CreateTestCluster(Enumerable.Empty<TransactionGetResult>());
             var mockCollection = new MockCollectionWithNames(nameof(DataAccess_Is_Abstracted) + "col", nameof(DataAccess_Is_Abstracted) + "scp", nameof(DataAccess_Is_Abstracted) + "bkt");
             var atr = new MockAtrRepository();

@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Couchbase.KeyValue;
 using Couchbase.Management.Buckets;
+using Couchbase.Management.Collections;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -16,6 +17,8 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
     public class ClusterFixture : IAsyncLifetime
     {
         public static readonly string BucketName = "default";
+        public static readonly string CustomScopeName = "IntegrationTestCustomScope";
+        public static readonly string CustomCollectionName = "IntTestCol";
         internal static StringBuilder Logs = new StringBuilder();
         private readonly TestSettings _settings;
         private bool _bucketOpened;
@@ -88,6 +91,15 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
             return await bucket.DefaultCollectionAsync();
         }
 
+        public async Task<ICouchbaseCollection> OpenCustomCollection(ITestOutputHelper outputHelper)
+        {
+            var cluster = await OpenClusterAsync(outputHelper);
+            var bucket = await cluster.BucketAsync(BucketName);
+            var scope = await bucket.ScopeAsync(CustomScopeName);
+            var collection = await scope.CollectionAsync(CustomCollectionName);
+            return collection;
+        }
+
         public async Task InitializeAsync()
         {
             var opts = GetClusterOptions();
@@ -114,6 +126,31 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Fixtures
             catch (System.Net.Http.HttpRequestException)
             {
                 // why did it fail?
+            }
+
+            try
+            {
+                var bucket = await Cluster.BucketAsync(BucketName);
+                try
+                {
+                    await bucket.Collections.CreateScopeAsync(CustomScopeName);
+                    await Task.Delay(5_000);
+                }
+                catch (ScopeExistsException)
+                {}
+
+                try
+                {
+                    var collectionSpec = new CollectionSpec(scopeName: CustomScopeName, CustomCollectionName);
+                    await bucket.Collections.CreateCollectionAsync(collectionSpec);
+                    await Task.Delay(5_000);
+                }
+                catch (CollectionExistsException)
+                {}
+            }
+            catch
+            {
+                throw;
             }
         }
 

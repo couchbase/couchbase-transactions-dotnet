@@ -1272,6 +1272,7 @@ namespace Couchbase.Transactions
 
         protected async Task InitAtrIfNeeded(ICouchbaseCollection collection, string id)
         {
+            var atrCollection = await collection.Scope.Bucket.DefaultCollectionAsync();
             var testHookAtrId = await _testHooks.AtrIdForVBucket(this, AtrIds.GetVBucketId(id));
             var atrId = AtrIds.GetAtrId(id);
             lock (_initAtrLock)
@@ -1280,7 +1281,7 @@ namespace Couchbase.Transactions
                 _atr ??= new AtrRepository(
                     attemptId: AttemptId,
                     overallContext: _overallContext,
-                    atrCollection: collection,
+                    atrCollection: atrCollection,
                     atrId: atrId,
                     atrDurability: _config.DurabilityLevel,
                     testHookAtrId: testHookAtrId);

@@ -60,6 +60,9 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 var result = await txn.RunAsync(async ctx =>
                 {
                     var insertResult = await ctx.InsertAsync(defaultCollection, docId, sampleDoc).ConfigureAwait(false);
+                    Assert.Equal("_default", insertResult?.TransactionXattrs?.AtrRef?.CollectionName);
+                    Assert.Equal("_default", insertResult?.TransactionXattrs?.AtrRef?.ScopeName);
+
                     var getResult = await ctx.GetAsync(defaultCollection, docId);
                     Assert.NotNull(getResult);
                     var asJobj = getResult!.ContentAs<JObject>();
@@ -87,7 +90,60 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 catch (Exception e)
                 {
                     _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
-                    throw;
+                }
+            }
+        }
+
+        [Fact]
+        public async Task Basic_Insert_CustomCollection()
+        {
+            // Use a feature from an unreleased CouchbaseNetClient to guarantee we're using latest from master instead.
+            var ex = new Core.Exceptions.CasMismatchException();
+
+            var customCollection = await _fixture.OpenCustomCollection(_outputHelper);
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
+            var sampleDoc = new { type = nameof(Basic_Insert_Should_Succeed), foo = "bar", revision = 100 };
+            var docId = nameof(Basic_Insert_Should_Succeed) + Guid.NewGuid().ToString();
+            try
+            {
+                var durability = await TestUtil.InsertAndVerifyDurability(customCollection, docId + "_testDurability", sampleDoc);
+
+                var txn = Transactions.Create(_fixture.Cluster);
+                var configBuilder = TransactionConfigBuilder.Create();
+                configBuilder.DurabilityLevel(durability);
+
+                var result = await txn.RunAsync(async ctx =>
+                {
+                    var insertResult = await ctx.InsertAsync(customCollection, docId, sampleDoc).ConfigureAwait(false);
+                    Assert.Equal("_default", insertResult?.TransactionXattrs?.AtrRef?.CollectionName);
+                    Assert.Equal("_default", insertResult?.TransactionXattrs?.AtrRef?.ScopeName);
+                    var getResult = await ctx.GetAsync(customCollection, docId);
+                    Assert.NotNull(getResult);
+                    var asJobj = getResult!.ContentAs<JObject>();
+                    Assert.Equal("bar", asJobj["foo"].Value<string>());
+                });
+
+                var postTxnGetResult = await customCollection.GetAsync(docId);
+                var postTxnDoc = postTxnGetResult.ContentAs<dynamic>();
+                Assert.Equal("100", postTxnDoc.revision.ToString());
+
+                var postTxnLookupInResult =
+                    await customCollection.LookupInAsync(docId, spec => spec.Get("txn", isXattr: true));
+                Assert.False(postTxnLookupInResult.Exists(0));
+            }
+            catch
+            {
+                throw;
+            }
+            finally
+            {
+                try
+                {
+                    await customCollection.RemoveAsync(docId);
+                }
+                catch (Exception e)
+                {
+                    _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
                 }
             }
         }
@@ -490,10 +546,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                     var documentLookupResult =
                         await DocumentRepository.LookupDocumentAsync(defaultCollection, id, null, true);
 
-                    ////Assert.NotNull(documentLookupResult.DocumentAs<JObject>());
-                    ////Assert.NotNull(documentLookupResult?.TransactionXattrs);
-                    ////_outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
-
                     return 0;
                 },
 
@@ -501,10 +553,6 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
                 {
                     var documentLookupResult =
                         await DocumentRepository.LookupDocumentAsync(defaultCollection, id, null, true);
-
-                    ////Assert.NotNull(documentLookupResult.DocumentAs<JObject>());
-                    ////Assert.NotNull(documentLookupResult?.TransactionXattrs);
-                    ////_outputHelper.WriteLine(JObject.FromObject(documentLookupResult!.TransactionXattrs).ToString());
 
                     return 0;
                 }

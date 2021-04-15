@@ -137,6 +137,8 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
             mockScope.SetupGet(s => s.Name).Returns(scopeName);
             var mockBucket = new Mock<IBucket>(MockBehavior.Strict);
             mockBucket.SetupGet(b => b.Name).Returns(bucketName);
+            var defaultCollectionOnBucket = new Mock<ICouchbaseCollection>();
+            mockBucket.Setup(b => b.DefaultCollectionAsync()).Returns(new ValueTask<ICouchbaseCollection>(defaultCollectionOnBucket.Object));
             mockScope.SetupGet(s => s.Bucket).Returns(mockBucket.Object);
             Scope = mockScope.Object;
         }
