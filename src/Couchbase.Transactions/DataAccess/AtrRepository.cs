@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Couchbase.Core.Exceptions.KeyValue;
+using Couchbase.Core.Retry;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Components;
 using Couchbase.Transactions.Config;
@@ -76,7 +77,7 @@ namespace Couchbase.Transactions.DataAccess
 
             var lookupInResult = await atrCollection.LookupInAsync(atrId,
                 specs => specs.Get(TransactionFields.AtrFieldAttempts, isXattr: true),
-                opts => opts.Timeout(keyValueTimeout).AccessDeleted(true)).CAF();
+                opts => opts.Defaults(keyValueTimeout).AccessDeleted(true)).CAF();
 
             if (!lookupInResult.Exists(0))
             {
@@ -132,9 +133,7 @@ namespace Couchbase.Transactions.DataAccess
                 MutateInSpec.Remove(_atrRoot, isXattr: true)
             };
 
-            _ = await Collection.MutateInAsync(AtrId, specs,
-                opts => opts.StoreSemantics(StoreSemantics.Replace)
-                            .Durability(_atrDurability)).CAF();
+            _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
         }
 
         public async Task MutateAtrPending(ulong exp)
@@ -150,10 +149,7 @@ namespace Couchbase.Transactions.DataAccess
                             createPath: false, isXattr: true),
             };
 
-            _ = await Collection.MutateInAsync(AtrId, specs,
-                opts => opts.StoreSemantics(StoreSemantics.Upsert)
-                            .Durability(_atrDurability)
-                ).CAF();
+            _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Upsert)).CAF();
         }
 
         public async Task MutateAtrCommit(IEnumerable<StagedMutation> stagedMutations)
@@ -175,9 +171,7 @@ namespace Couchbase.Transactions.DataAccess
                     isXattr: true)
             };
 
-            _ = await Collection.MutateInAsync(AtrId, specs,
-                opts => opts.StoreSemantics(StoreSemantics.Replace)
-                            .Durability(_atrDurability)).CAF();
+            _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
         }
 
         public async Task MutateAtrAborted(IEnumerable<StagedMutation> stagedMutations)
@@ -193,8 +187,7 @@ namespace Couchbase.Transactions.DataAccess
                 MutateInSpec.Upsert(_prefixedAtrFieldDocsRemoved, removes, isXattr: true),
             };
 
-            _ = await Collection.MutateInAsync(AtrId, specs,
-                opts => opts.StoreSemantics(StoreSemantics.Replace).Durability(_atrDurability)).CAF();
+            _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
         }
 
         public async Task MutateAtrRolledBack()
@@ -204,16 +197,14 @@ namespace Couchbase.Transactions.DataAccess
                 MutateInSpec.Remove(_atrRoot, isXattr: true),
             };
 
-            _ = await Collection.MutateInAsync(AtrId, specs,
-                opts => opts.StoreSemantics(StoreSemantics.Replace)
-                            .Durability(_atrDurability)).CAF();
+            _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
         }
 
         public async Task<string> LookupAtrState()
         {
             var lookupInResult = await Collection!.LookupInAsync(AtrId,
                     specs => specs.Get(_prefixedAtrFieldStatus, isXattr: true),
-                    opts => opts.AccessDeleted(true))
+                    opts => GetLookupOpts().AccessDeleted(true))
                 .CAF();
             var refreshedStatus = lookupInResult.ContentAs<string>(0);
             return refreshedStatus;
@@ -230,6 +221,12 @@ namespace Couchbase.Transactions.DataAccess
             var removes = new JArray(stagedRemoves.Select(sm => sm.ForAtr()));
             return (inserts, replaces, removes);
         }
+
+        private LookupInOptions GetLookupOpts() => new LookupInOptions().Defaults(_overallContext.Config.KeyValueTimeout);
+
+        private MutateInOptions GetMutateOpts(StoreSemantics storeSemantics) => new MutateInOptions()
+            .Defaults(_atrDurability, _overallContext.Config.KeyValueTimeout)
+            .StoreSemantics(storeSemantics);
     }
 }
 

@@ -29,7 +29,7 @@ namespace Couchbase.Transactions.DataAccess
 
         public async Task<(ulong updatedCas, MutationToken mutationToken)> MutateStagedInsert(ICouchbaseCollection collection, string docId, object content, IAtrRepository atr, ulong? cas = null)
         {
-            List<MutateInSpec> specs = CreateMutationOps(atr, "insert", content);
+            List<MutateInSpec> specs = CreateMutationSpecs(atr, "insert", content);
             var opts = GetMutateInOptions(StoreSemantics.Insert)
                 .AccessDeleted(true)
                 .CreateAsDeleted(true);
@@ -54,7 +54,7 @@ namespace Couchbase.Transactions.DataAccess
                 throw new ArgumentOutOfRangeException("Document CAS should not be wildcard or default when replacing.");
             }
 
-            var specs = CreateMutationOps(atr, "replace", content, doc.DocumentMetadata);
+            var specs = CreateMutationSpecs(atr, "replace", content, doc.DocumentMetadata);
             var opts = GetMutateInOptions(StoreSemantics.Replace).Cas(doc.Cas);
             if (accessDeleted)
             {
@@ -67,9 +67,8 @@ namespace Couchbase.Transactions.DataAccess
 
         public async Task<(ulong updatedCas, MutationToken mutationToken)> MutateStagedRemove(TransactionGetResult doc, IAtrRepository atr)
         {
-            var specs = CreateMutationOps(atr, "remove", TransactionFields.StagedDataRemoveKeyword, doc.DocumentMetadata);
+            var specs = CreateMutationSpecs(atr, "remove", TransactionFields.StagedDataRemoveKeyword, doc.DocumentMetadata);
             var opts = GetMutateInOptions(StoreSemantics.Replace).Cas(doc.Cas).CreateAsDeleted(true);
-
             var updatedDoc = await doc.Collection.MutateInAsync(doc.Id, specs, opts).CAF();
             return (updatedDoc.Cas, updatedDoc.MutationToken);
         }
@@ -78,13 +77,7 @@ namespace Couchbase.Transactions.DataAccess
         {
             if (insertMode)
             {
-                // TODO: set up all these options in the constructor, instead of new'ing them up each time.
-                var opts = new InsertOptions().Durability(_durability);
-                if (_keyValueTimeout.HasValue)
-                {
-                    opts.Timeout(_keyValueTimeout.Value);
-                }
-
+                var opts = new InsertOptions().Defaults(_durability, _keyValueTimeout);
                 var mutateResult = await collection.InsertAsync(docId, finalDoc, opts).CAF();
                 return (mutateResult.Cas, mutateResult?.MutationToken);
             }
@@ -102,12 +95,7 @@ namespace Couchbase.Transactions.DataAccess
 
         public async Task UnstageRemove(ICouchbaseCollection collection, string docId)
         {
-            var opts = new RemoveOptions().Cas(0).Durability(_durability);
-            if (_keyValueTimeout.HasValue)
-            {
-                opts.Timeout(_keyValueTimeout.Value);
-            }
-
+            var opts = new RemoveOptions().Defaults(_durability, _keyValueTimeout).Cas(0);
             await collection.RemoveAsync(docId, opts).CAF();
         }
 
@@ -125,8 +113,7 @@ namespace Couchbase.Transactions.DataAccess
                         MutateInSpec.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
             };
 
-            _ = await collection.MutateInAsync(docId,
-                specs, opts).CAF();
+            _ = await collection.MutateInAsync(docId, specs, opts).CAF();
         }
 
         public async Task<DocumentLookupResult> LookupDocumentAsync(ICouchbaseCollection collection, string docId, bool fullDocument = true) => await LookupDocumentAsync(collection, docId, _keyValueTimeout, fullDocument);
@@ -139,7 +126,7 @@ namespace Couchbase.Transactions.DataAccess
                 LookupInSpec.Get(TransactionFields.StagedData, isXattr: true)
             };
 
-            var opts = new LookupInOptions().AccessDeleted(true).Timeout(keyValueTimeout);
+            var opts = new LookupInOptions().Defaults(keyValueTimeout).AccessDeleted(true);
 
             int? txnIndex = 0;
             int docMetaIndex = 1;
@@ -187,12 +174,10 @@ namespace Couchbase.Transactions.DataAccess
             return result;
         }
 
-        private MutateInOptions GetMutateInOptions(StoreSemantics storeSemantics) => new MutateInOptions()
-                .Timeout(_keyValueTimeout)
-                .StoreSemantics(storeSemantics)
-                .Durability(_durability);
+        private MutateInOptions GetMutateInOptions(StoreSemantics storeSemantics) => new MutateInOptions().Defaults(_durability, _keyValueTimeout)
+                .StoreSemantics(storeSemantics);
 
-        private List<MutateInSpec> CreateMutationOps(IAtrRepository atr, string opType, object content, DocumentMetadata? dm = null)
+        private List<MutateInSpec> CreateMutationSpecs(IAtrRepository atr, string opType, object content, DocumentMetadata? dm = null)
         {
             var specs = new List<MutateInSpec>
             {
@@ -210,9 +195,7 @@ namespace Couchbase.Transactions.DataAccess
             switch (opType)
             {
                 case "remove":
-                    // FIXME:  why does this fail?  (with or without the UPSERT)
-                    ////specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData, string.Empty, createPath: true, isXattr: true));
-                    ////specs.Add(MutateInSpec.Remove(TransactionFields.StagedData, isXattr: true));
+                    // do nothing with staged data.
                     break;
                 case "replace":
                 case "insert":
@@ -240,7 +223,6 @@ namespace Couchbase.Transactions.DataAccess
 
             return specs;
         }
-
     }
 }
 
