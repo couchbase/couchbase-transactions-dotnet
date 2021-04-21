@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace Couchbase.Transactions.Log
+namespace Couchbase.Transactions.LogUtil
 {
     internal static class LoggingExtensions
     {

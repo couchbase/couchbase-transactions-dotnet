@@ -31,6 +31,8 @@ namespace Couchbase.Transactions
         {
             return JObject.FromObject(this).ToString();
         }
+
+        public IEnumerable<string> Logs { get; internal set; } = Enumerable.Empty<string>();
     }
 }
 

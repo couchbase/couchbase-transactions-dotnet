@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using Couchbase.Core.Diagnostics.Tracing;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Config;
-using Couchbase.Transactions.Log;
+using Couchbase.Transactions.LogUtil;
 using Couchbase.Transactions.Support;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;

@@ -5,7 +5,7 @@ using System.Text;
 using Couchbase.Core;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Components;
-using Couchbase.Transactions.Log;
+using Couchbase.Transactions.LogUtil;
 using Couchbase.Transactions.Support;
 using Newtonsoft.Json;
 

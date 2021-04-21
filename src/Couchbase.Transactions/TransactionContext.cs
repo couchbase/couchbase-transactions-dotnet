@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
@@ -8,6 +9,8 @@ namespace Couchbase.Transactions
 {
     internal class TransactionContext
     {
+        private ConcurrentQueue<string> _logs = new ConcurrentQueue<string>();
+
         public string TransactionId { get; }
         public DateTimeOffset StartTime { get; }
         public TransactionConfig Config { get; }
@@ -29,6 +32,10 @@ namespace Couchbase.Transactions
             Config = config;
             PerConfig = perConfig ?? new PerTransactionConfig();
         }
+
+        internal void AddLog(string msg) => _logs.Enqueue(msg);
+
+        internal IEnumerable<string> Logs => _logs.ToArray();
     }
 }
 

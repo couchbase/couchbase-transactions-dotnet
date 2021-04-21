@@ -114,7 +114,7 @@ namespace Couchbase.Transactions
         /// Create a <see cref="Transactions"/> instance for running transactions against the specified <see cref="ICluster">Cluster</see>.
         /// </summary>
         /// <param name="cluster">The cluster where your documents will be located.</param>
-        /// <param name="config">The <see cref="TransactionConfigBuilder"/> to generate a <see cref="TransactionConfig"/> to use for all transactions against this cluster.</param>
+        /// <param name="configBuilder">The <see cref="TransactionConfigBuilder"/> to generate a <see cref="TransactionConfig"/> to use for all transactions against this cluster.</param>
         /// <returns>A <see cref="Transactions"/> instance.</returns>
         /// <remarks>The instance returned from this method should be kept for the lifetime of your application and used like a singleton per Couchbase cluster you will be accessing.</remarks>
         public static Transactions Create(ICluster cluster, TransactionConfigBuilder configBuilder) =>
@@ -209,15 +209,17 @@ namespace Couchbase.Transactions
             throw new InvalidOperationException("Loop should not have exited without expiration.");
         }
 
-        private async Task ExecuteApplicationLambda(Func<AttemptContext, Task> transactionLogic, TransactionContext overallContext, ILoggerFactory? loggerFactory, TransactionResult result)
+        private async Task ExecuteApplicationLambda(Func<AttemptContext, Task> transactionLogic, TransactionContext overallContext, ILoggerFactory loggerFactory, TransactionResult result)
         {
+            var delegatingLoggerFactory = new LogUtil.TransactionsLoggerFactory(loggerFactory, overallContext);
+            var memoryLogger = delegatingLoggerFactory.CreateLogger(nameof(ExecuteApplicationLambda));
             var ctx = new AttemptContext(
                 overallContext,
                 Config,
                 Guid.NewGuid().ToString(),
                 TestHooks,
                 _redactor,
-                loggerFactory,
+                delegatingLoggerFactory,
                 DocumentRepository,
                 AtrRepository
             );
@@ -256,12 +258,12 @@ namespace Couchbase.Transactions
                 {
                     try
                     {
-                        _logger.LogWarning("Attempt failed, attempting automatic rollback...");
+                        memoryLogger.LogWarning("Attempt failed, attempting automatic rollback...");
                         await ctx.RollbackInternal(isAppRollback: false).CAF();
                     }
                     catch (Exception rollbackEx)
                     {
-                        _logger.LogWarning("Rollback failed due to {reason}", rollbackEx.Message);
+                        memoryLogger.LogWarning("Rollback failed due to {reason}", rollbackEx.Message);
                         // if rollback failed, raise the original error, but with retry disabled:
                         // Error(ec = err.ec, cause = err.cause, raise = err.raise
                         throw ErrorBuilder.CreateError(ctx, ex.CausingErrorClass)
@@ -281,7 +283,7 @@ namespace Couchbase.Transactions
                         throw;
                     }
 
-                    _logger.LogWarning("Transaction is expired.  No more retries or rollbacks.");
+                    memoryLogger.LogWarning("Transaction is expired.  No more retries or rollbacks.");
                     throw ErrorBuilder.CreateError(ctx, ErrorClass.FailExpiry)
                         .DoNotRollbackAttempt()
                         .RaiseException(TransactionOperationFailedException.FinalError.TransactionExpired)
@@ -289,7 +291,7 @@ namespace Couchbase.Transactions
                 }
 
                 // Else if it succeeded or no rollback was performed, propagate err up.
-                _logger.LogDebug("Propagating error up. (ec = {ec}, retry = {retry}, finalError = {finalError})", ex.CausingErrorClass, ex.RetryTransaction, ex.FinalErrorToRaise);
+                memoryLogger.LogDebug("Propagating error up. (ec = {ec}, retry = {retry}, finalError = {finalError})", ex.CausingErrorClass, ex.RetryTransaction, ex.FinalErrorToRaise);
                 throw;
             }
             finally
@@ -297,8 +299,11 @@ namespace Couchbase.Transactions
                 result.UnstagingComplete = ctx.UnstagingComplete;
                 if (Config.CleanupClientAttempts)
                 {
+                    memoryLogger.LogInformation("Adding cleanup request for {attemptId}", ctx.AttemptId);
                     AddCleanupRequest(ctx);
                 }
+
+                result.Logs = overallContext.Logs;
             }
         }
 

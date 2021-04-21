@@ -7,6 +7,8 @@ using Couchbase.Transactions;
 using Couchbase.Transactions.Config;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Serilog;
+using Serilog.Extensions.Logging;
 
 namespace CouchbaseTransactionExample
 {
@@ -16,8 +18,15 @@ namespace CouchbaseTransactionExample
         {
             try
             {
+                var clusterOptions = new ClusterOptions()
+                {
+                    RedactionLevel = Couchbase.Core.Logging.RedactionLevel.Partial,
+                    UserName = "Administrator",
+                    Password = "password"
+                };
+
                 await using var cluster =
-                    await Cluster.ConnectAsync("couchbase://localhost", "Administrator", "password");
+                    await Cluster.ConnectAsync("couchbase://localhost", clusterOptions);
                 await using var bucket = await cluster.BucketAsync("default");
                 var collection = await bucket.DefaultCollectionAsync();
                 var sampleDoc = new ExampleTransactionDocument();
@@ -27,7 +36,9 @@ namespace CouchbaseTransactionExample
                 var getResultRoundTrip = await collection.GetAsync(sampleDoc.Id).ConfigureAwait(false);
                 var roundTripSampleDoc = getResultRoundTrip.ContentAs<ExampleTransactionDocument>();
 
+                Serilog.Log.Logger = new Serilog.LoggerConfiguration().WriteTo.Console().CreateLogger();
                 var configBuilder = TransactionConfigBuilder.Create()
+                    .LoggerFactory(new SerilogLoggerFactory())
                     .DurabilityLevel(DurabilityLevel.None);
 
                 if (Debugger.IsAttached)
