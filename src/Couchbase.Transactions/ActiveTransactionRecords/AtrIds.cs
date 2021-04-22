@@ -1041,7 +1041,7 @@ namespace Couchbase.Transactions.ActiveTransactionRecords
             "_txn:atr-1020-#249",
             "_txn:atr-1021-#159",
             "_txn:atr-1022-#cb",
-            "_txn:atr-1023-#10"
+            "_txn:atr-1023-#10c2"
         };
         public static int NumAtrs => AllAtrIds.Count;
 
