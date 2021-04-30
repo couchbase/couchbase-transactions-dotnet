@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <UserSecretsId>58fdeb9c-f0a3-449b-84bc-d7c614ab7ec8</UserSecretsId>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
-    <PackageLicenseExpression></PackageLicenseExpression>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <Copyright>Couchbase, Inc. 2020</Copyright>
     <PackageIcon>couchbase-icon.png</PackageIcon>
     <PackageIconUrl />
@@ -17,10 +17,11 @@
     <RepositoryUrl>https://github.com/couchbase/couchbase-transactions-dotnet</RepositoryUrl>
     <RepositoryType>GitHub</RepositoryType>
     <PackageTags>couchbase, transactions, distributed</PackageTags>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
-    <PackageLicenseFile>LICENSE.md</PackageLicenseFile>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(SignAssembly)'=='true'">
+    <DefineConstants>$(DefineConstants);SIGNING</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
