@@ -1,0 +1,8 @@
+<Project>
+ <PropertyGroup>
+   <!-- true = use latest NuGet for CouchbaseNetClient reference -->
+   <!-- false = use project reference assuming couchbase-net-client directory at the same level as this directory -->
+   <!-- You will have to do a Clean between builds for this to take effect properly, and maybe build from the command-line if VS doesn't seem to be picking up the changes. -->
+   <UseNugetForCouchbaseNetClient>false</UseNugetForCouchbaseNetClient>
+ </PropertyGroup>
+</Project>
