@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
+using Microsoft.Extensions.Logging;
 
 namespace Couchbase.Transactions.LogUtil
 {
@@ -15,6 +17,8 @@ namespace Couchbase.Transactions.LogUtil
 
             return str.Substring(0, Math.Min(maxChars, str.Length));
         }
+
+        internal static IDisposable BeginMethodScope(this ILogger logger, [CallerMemberName] string method = "UnknownScope") => logger.BeginScope(method);
     }
 }
 

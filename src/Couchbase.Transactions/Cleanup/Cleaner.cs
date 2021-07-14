@@ -11,6 +11,7 @@ using Couchbase.Transactions.DataAccess;
 using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Internal.Test;
+using Couchbase.Transactions.LogUtil;
 using Couchbase.Transactions.Support;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
@@ -89,6 +90,8 @@ namespace Couchbase.Transactions.Cleanup
 
         private async Task CleanupAtrEntry(CleanupRequest cleanupRequest)
         {
+            using var logScope = _logger.BeginMethodScope();
+            _logger.LogInformation("Cleaning up atr entry: {atr}/{attemptId}", cleanupRequest.AtrId, cleanupRequest.AttemptId);
             try
             {
                 await TestHooks.BeforeAtrRemove(cleanupRequest.AtrId).CAF();
@@ -120,8 +123,11 @@ namespace Couchbase.Transactions.Cleanup
                 var ec = ex.Classify();
                 if (ec == ErrorClass.FailPathNotFound)
                 {
+                    _logger.LogDebug("PathNotFound by the time cleanup attempted: {atr}/{attemptId}", cleanupRequest.AtrId, cleanupRequest.AttemptId);
                     return;
                 }
+
+                _logger.LogWarning("Failed to cleanup ATR {atr}/{attemptId}: {reason}", cleanupRequest.AtrId, cleanupRequest.AttemptId, ex);
 
                 throw;
             }
@@ -129,6 +135,7 @@ namespace Couchbase.Transactions.Cleanup
 
         private async Task CleanupDocsAborted(CleanupRequest cleanupRequest)
         {
+            using var logScope = _logger.BeginMethodScope();
             foreach (var dr in cleanupRequest.InsertedIds)
             {
                 await CleanupDoc(dr, requireCrc32ToMatchStaging: false, attemptId: cleanupRequest.AttemptId,
@@ -172,6 +179,7 @@ namespace Couchbase.Transactions.Cleanup
 
         private async Task CleanupDocsCommitted(CleanupRequest cleanupRequest)
         {
+            using var logScope = _logger.BeginMethodScope();
             var insertedOrReplaced = cleanupRequest.InsertedIds.Concat(cleanupRequest.ReplacedIds);
             foreach (var dr in insertedOrReplaced)
             {

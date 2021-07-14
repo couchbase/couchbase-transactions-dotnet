@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Transactions;
 using Couchbase.Core;
+using Couchbase.Core.Diagnostics.Tracing;
 using Couchbase.Core.Exceptions;
 using Couchbase.Core.Exceptions.KeyValue;
 using Couchbase.Core.IO.Operations;
@@ -59,6 +60,8 @@ namespace Couchbase.Transactions
         private readonly List<MutationToken> _finalMutations = new List<MutationToken>();
         private readonly ConcurrentDictionary<long, TransactionOperationFailedException> _previousErrors = new ConcurrentDictionary<long, TransactionOperationFailedException>();
         private bool _expirationOvertimeMode = false;
+        private readonly ILoggerFactory _loggerFactory;
+        private readonly IRequestTracer _requestTracer;
 
         public string AttemptId { get; }
         public string TransactionId => _overallContext.TransactionId;
@@ -72,14 +75,17 @@ namespace Couchbase.Transactions
             IRedactor redactor,
             Microsoft.Extensions.Logging.ILoggerFactory loggerFactory,
             IDocumentRepository? documentRepository = null,
-            IAtrRepository? atrRepository = null)
+            IAtrRepository? atrRepository = null,
+            IRequestTracer? requestTracer = null)
         {
+            _requestTracer = requestTracer ?? new NoopRequestTracer();
             AttemptId = attemptId ?? throw new ArgumentNullException(nameof(attemptId));
             _overallContext = overallContext ?? throw new ArgumentNullException(nameof(overallContext));
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _testHooks = testHooks ?? DefaultTestHooks.Instance;
             Redactor = redactor ?? throw new ArgumentNullException(nameof(redactor));
             _effectiveDurabilityLevel = _overallContext.PerConfig?.DurabilityLevel ?? config.DurabilityLevel;
+            _loggerFactory = loggerFactory;
             Logger = loggerFactory.CreateLogger<AttemptContext>();
             _triage = new ErrorTriage(this, loggerFactory);
             _docs = documentRepository ?? new DocumentRepository(_overallContext, _config.KeyValueTimeout, _effectiveDurabilityLevel, AttemptId);
@@ -89,7 +95,7 @@ namespace Couchbase.Transactions
             }
         }
 
-        public ILogger<AttemptContext>? Logger { get; }
+        public ILogger<AttemptContext> Logger { get; }
 
         /// <summary>
         /// Gets a document.
@@ -114,9 +120,11 @@ namespace Couchbase.Transactions
         /// </summary>
         /// <param name="collection">The collection to look up the document in.</param>
         /// <param name="id">The ID of the document.</param>
+        /// <param name="parentSpan">The optional parent tracing span.</param>
         /// <returns>A <see cref="TransactionGetResult"/> containing the document, or null if  not found.</returns>
-        public async Task<TransactionGetResult?> GetOptionalAsync(ICouchbaseCollection collection, string id)
+        public async Task<TransactionGetResult?> GetOptionalAsync(ICouchbaseCollection collection, string id, IRequestSpan? parentSpan = null)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             DoneCheck();
             CheckErrors();
             CheckExpiryAndThrow(id, hookPoint: ITestHooks.HOOK_GET);
@@ -150,7 +158,7 @@ namespace Couchbase.Transactions
                 {
                     await _testHooks.BeforeDocGet(this, id).CAF();
 
-                    var result = await GetWithMavAsync(collection, id);
+                    var result = await GetWithMavAsync(collection, id, parentSpan: traceSpan.Item);
 
                     await _testHooks.AfterGetComplete(this, id).CAF();
                     await ForwardCompatibility.Check(this, ForwardCompatibility.Gets, result?.TransactionXattrs?.ForwardCompatibility);
@@ -175,8 +183,9 @@ namespace Couchbase.Transactions
             }
         }
 
-        private async Task<TransactionGetResult?> GetWithMavAsync(ICouchbaseCollection collection, string id, string? resolveMissingAtrEntry = null)
+        private async Task<TransactionGetResult?> GetWithMavAsync(ICouchbaseCollection collection, string id, string? resolveMissingAtrEntry = null, IRequestSpan? parentSpan = null)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             try
             {
                 // we need to resolve the state of that transaction. Here is where we do the “Monotonic Atomic View” (MAV) logic
@@ -308,29 +317,32 @@ namespace Couchbase.Transactions
         /// </summary>
         /// <param name="doc">The <see cref="TransactionGetResult"/> of a document previously looked up in this transaction.</param>
         /// <param name="content">The updated content.</param>
+        /// <param name="parentSpan">The optional parent tracing span.</param>
         /// <returns>A <see cref="TransactionGetResult"/> reflecting the updated content.</returns>
-        public async Task<TransactionGetResult> ReplaceAsync(TransactionGetResult doc, object content)
+        public async Task<TransactionGetResult> ReplaceAsync(TransactionGetResult doc, object content, IRequestSpan? parentSpan = null)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             DoneCheck();
             CheckErrors();
             CheckExpiryAndThrow(doc.Id, ITestHooks.HOOK_REPLACE);
-            await CheckWriteWriteConflict(doc, ForwardCompatibility.WriteWriteConflictReplacing).CAF();
-            await InitAtrIfNeeded(doc.Collection, doc.Id);
-            await SetAtrPendingIfFirstMutation(doc.Collection);
+            await CheckWriteWriteConflict(doc, ForwardCompatibility.WriteWriteConflictReplacing, traceSpan.Item).CAF();
+            await InitAtrIfNeeded(doc.Collection, doc.Id, traceSpan.Item);
+            await SetAtrPendingIfFirstMutation(doc.Collection, traceSpan.Item);
 
-            return await CreateStagedReplace(doc, content, accessDeleted: doc.IsDeleted);
+            return await CreateStagedReplace(doc, content, accessDeleted: doc.IsDeleted, parentSpan: traceSpan.Item);
         }
 
-        private async Task SetAtrPendingIfFirstMutation(ICouchbaseCollection collection)
+        private async Task SetAtrPendingIfFirstMutation(ICouchbaseCollection collection, IRequestSpan? parentSpan)
         {
             if (_stagedMutations.Count == 0)
             {
-                await SetAtrPending();
+                await SetAtrPending(parentSpan);
             }
         }
 
-        private async Task<TransactionGetResult> CreateStagedReplace(TransactionGetResult doc, object content, bool accessDeleted)
+        private async Task<TransactionGetResult> CreateStagedReplace(TransactionGetResult doc, object content, bool accessDeleted, IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             _ = _atr ?? throw new ArgumentNullException(nameof(_atr), "ATR should have already been initialized");
             try
             {
@@ -399,9 +411,12 @@ namespace Couchbase.Transactions
         /// <param name="collection">The collection to insert the document into.</param>
         /// <param name="id">The ID of the new document.</param>
         /// <param name="content">The content of the new document.</param>
+        /// <param name="parentSpan">The optional parent tracing span.</param>
         /// <returns>A <see cref="TransactionGetResult"/> representing the inserted document.</returns>
-        public async Task<TransactionGetResult> InsertAsync(ICouchbaseCollection collection, string id, object content)
+        public async Task<TransactionGetResult> InsertAsync(ICouchbaseCollection collection, string id, object content, IRequestSpan? parentSpan = null)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+            using var logScope = Logger.BeginMethodScope();
             DoneCheck();
             CheckErrors();
 
@@ -415,15 +430,16 @@ namespace Couchbase.Transactions
 
             CheckExpiryAndThrow(id, hookPoint: ITestHooks.HOOK_INSERT);
 
-            await InitAtrIfNeeded(collection, id);
-            await SetAtrPendingIfFirstMutation(collection);
+            await InitAtrIfNeeded(collection, id, traceSpan.Item);
+            await SetAtrPendingIfFirstMutation(collection, traceSpan.Item);
 
 
-            return await CreateStagedInsert(collection, id, content).CAF();
+            return await CreateStagedInsert(collection, id, content, parentSpan: traceSpan.Item).CAF();
         }
 
-        private async Task<TransactionGetResult> CreateStagedInsert(ICouchbaseCollection collection, string id, object content, ulong? cas = null)
+        private async Task<TransactionGetResult> CreateStagedInsert(ICouchbaseCollection collection, string id, object content, ulong? cas = null, IRequestSpan? parentSpan = null)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             try
             {
                 bool isTombstone = cas == null;
@@ -510,7 +526,7 @@ namespace Couchbase.Transactions
                                         {
                                             // Else call the CheckWriteWriteConflict logic, which conveniently does everything we need to handle the above cases.
                                             var getResult = docWithMeta!.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnOther);
-                                            await CheckWriteWriteConflict(getResult, ForwardCompatibility.WriteWriteConflictInserting).CAF();
+                                            await CheckWriteWriteConflict(getResult, ForwardCompatibility.WriteWriteConflictInserting, traceSpan.Item).CAF();
 
                                             // If this logic succeeds, we are ok to overwrite the doc.
                                             // Perform this algorithm (createStagedInsert) from the top, with cas=the cas from the get.
@@ -548,10 +564,10 @@ namespace Couchbase.Transactions
         private IEnumerable<StagedMutation> StagedRemoves => _stagedMutations.Where(sm => sm.Type == StagedMutationType.Remove);
 
 
-        private async Task SetAtrPending()
+        private async Task SetAtrPending(IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             var atrId = _atr!.AtrId;
-
             try
             {
                 await RepeatUntilSuccessOrThrow(async () =>
@@ -603,9 +619,11 @@ namespace Couchbase.Transactions
         /// Remove a document previously looked up in this transaction.
         /// </summary>
         /// <param name="doc">The <see cref="TransactionGetResult"/> of a document previously looked up in this transaction.</param>
+        /// <param name="parentSpan">The optional parent tracing span.</param>
         /// <returns>A task representing the asynchronous work.</returns>
-        public async Task RemoveAsync(TransactionGetResult doc)
+        public async Task RemoveAsync(TransactionGetResult doc, IRequestSpan? parentSpan = null)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             DoneCheck();
             CheckErrors();
             CheckExpiryAndThrow(doc.Id, ITestHooks.HOOK_REMOVE);
@@ -616,14 +634,15 @@ namespace Couchbase.Transactions
                     .Build();
             }
 
-            await CheckWriteWriteConflict(doc, ForwardCompatibility.WriteWriteConflictRemoving).CAF();
-            await InitAtrIfNeeded(doc.Collection, doc.Id);
-            await SetAtrPendingIfFirstMutation(doc.Collection).CAF();
-            await CreateStagedRemove(doc).CAF();
+            await CheckWriteWriteConflict(doc, ForwardCompatibility.WriteWriteConflictRemoving, traceSpan.Item).CAF();
+            await InitAtrIfNeeded(doc.Collection, doc.Id, traceSpan.Item);
+            await SetAtrPendingIfFirstMutation(doc.Collection, traceSpan.Item).CAF();
+            await CreateStagedRemove(doc, traceSpan.Item).CAF();
         }
 
-        private async Task CreateStagedRemove(TransactionGetResult doc)
+        private async Task CreateStagedRemove(TransactionGetResult doc, IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             try
             {
                 try
@@ -668,19 +687,20 @@ namespace Couchbase.Transactions
             }
         }
 
-        internal async Task AutoCommit()
+        internal async Task AutoCommit(IRequestSpan? parentSpan)
         {
             switch (_state)
             {
                 case AttemptStates.NOTHING_WRITTEN:
                 case AttemptStates.PENDING:
-                    await CommitAsync().CAF();
+                    await CommitAsync(parentSpan).CAF();
                     break;
             }
         }
 
-        public async Task CommitAsync()
+        public async Task CommitAsync(IRequestSpan? parentSpan = null)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             if (!_previousErrors.IsEmpty)
             {
                 _triage.ThrowIfCommitWithPreviousErrors(_previousErrors.Values);
@@ -696,13 +716,15 @@ namespace Couchbase.Transactions
                 return;
             }
 
-            await SetAtrCommit().CAF();
-            await UnstageDocs().CAF();
-            await SetAtrComplete().CAF();
+            await SetAtrCommit(traceSpan.Item).CAF();
+            await UnstageDocs(traceSpan.Item).CAF();
+            await SetAtrComplete(traceSpan.Item).CAF();
         }
 
-        private async Task SetAtrComplete()
+        private async Task SetAtrComplete(IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#SetATRComplete
             if (HasExpiredClientSide(null, ITestHooks.HOOK_ATR_COMPLETE) && !_expirationOvertimeMode)
             {
@@ -737,8 +759,9 @@ namespace Couchbase.Transactions
             }
         }
 
-        private async Task UnstageDocs()
+        private async Task UnstageDocs(IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             foreach (var sm in _stagedMutations)
             {
                 (var cas, var content) = await FetchIfNeededBeforeUnstage(sm).CAF();
@@ -759,8 +782,10 @@ namespace Couchbase.Transactions
             }
         }
 
-        private async Task UnstageRemove(StagedMutation sm, bool ambiguityResolutionMode = false)
+        private async Task UnstageRemove(StagedMutation sm, bool ambiguityResolutionMode = false, IRequestSpan? parentSpan = null)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+
             // TODO: Updated spec.
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Unstaging-Removes
             int retryCount = -1;
@@ -815,8 +840,10 @@ namespace Couchbase.Transactions
             return Task.FromResult((sm.Doc.Cas, sm.Content));
         }
 
-        private async Task UnstageInsertOrReplace(StagedMutation sm, ulong cas, object content, bool insertMode = false, bool ambiguityResolutionMode = false)
+        private async Task UnstageInsertOrReplace(StagedMutation sm, ulong cas, object content, bool insertMode = false, bool ambiguityResolutionMode = false, IRequestSpan? parentSpan = null)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Unstaging-Inserts-and-Replaces-Protocol-20-version
 
             await RepeatUntilSuccessOrThrow(async () =>
@@ -902,10 +929,11 @@ namespace Couchbase.Transactions
             }).CAF();
         }
 
-        private async Task SetAtrCommit()
+        private async Task SetAtrCommit(IRequestSpan? parentSpan)
         {
             _ = _atr ?? throw new InvalidOperationException($"{nameof(SetAtrCommit)} without initializing ATR.");
 
+            using var traceSpan = TraceSpan(parent: parentSpan);
             await RepeatUntilSuccessOrThrow(async () =>
             {
                 try
@@ -929,7 +957,7 @@ namespace Couchbase.Transactions
                     {
                         return await RepeatUntilSuccessOrThrow<RepeatAction>(async () =>
                         {
-                            var topRetry = await ResolveSetAtrCommitAmbiguity().CAF();
+                            var topRetry = await ResolveSetAtrCommitAmbiguity(traceSpan.Item).CAF();
                             return (RepeatAction.NoRepeat, topRetry);
                         });
                     }
@@ -939,8 +967,9 @@ namespace Couchbase.Transactions
             }).CAF();
         }
 
-        private async Task<RepeatAction> ResolveSetAtrCommitAmbiguity()
+        private async Task<RepeatAction> ResolveSetAtrCommitAmbiguity(IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             var setAtrCommitRetryAction = await RepeatUntilSuccessOrThrow<RepeatAction>(async () =>
             {
                 try
@@ -956,6 +985,8 @@ namespace Couchbase.Transactions
                             .DoNotRollbackAttempt()
                             .Build();
                     }
+
+                    Logger.LogDebug("Atr State = {atrState}", parsedRefreshStatus);
 
                     switch (parsedRefreshStatus)
                     {
@@ -1004,8 +1035,9 @@ namespace Couchbase.Transactions
             return setAtrCommitRetryAction;
         }
 
-        private async Task SetAtrAborted(bool isAppRollback)
+        private async Task SetAtrAborted(bool isAppRollback, IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             Logger.LogInformation("Setting Aborted status.  isAppRollback={isAppRollback}", isAppRollback);
 
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#SetATRAborted
@@ -1052,8 +1084,9 @@ namespace Couchbase.Transactions
             });
         }
 
-        private async Task SetAtrRolledBack()
+        private async Task SetAtrRolledBack(IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#SetATRRolledBack
             await RepeatUntilSuccessOrThrow(async () =>
             {
@@ -1097,9 +1130,10 @@ namespace Couchbase.Transactions
         /// <summary>
         /// Rollback the transaction, explicitly.
         /// </summary>
+        /// <param name="parentSpan">The optional parent tracing span.</param>
         /// <returns>A task representing the asynchronous work.</returns>
         /// <remarks>Calling this method on AttemptContext is usually unnecessary, as unhandled exceptions will trigger a rollback automatically.</remarks>
-        public Task RollbackAsync() => this.RollbackInternal(true);
+        public Task RollbackAsync(IRequestSpan? parentSpan = null) => this.RollbackInternal(true, parentSpan);
 
         internal TransactionAttempt ToAttempt()
         {
@@ -1124,8 +1158,10 @@ namespace Couchbase.Transactions
 
         protected bool IsDone => _state != AttemptStates.NOTHING_WRITTEN && _state != AttemptStates.PENDING;
 
-        internal async Task RollbackInternal(bool isAppRollback)
+        internal async Task RollbackInternal(bool isAppRollback, IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#rollbackInternal
             if (!_expirationOvertimeMode)
             {
@@ -1150,17 +1186,17 @@ namespace Couchbase.Transactions
                     .Build();
             }
 
-            await SetAtrAborted(isAppRollback).CAF();
+            await SetAtrAborted(isAppRollback, traceSpan.Item).CAF();
             foreach (var sm in _stagedMutations)
             {
                 switch (sm.Type)
                 {
                     case StagedMutationType.Insert:
-                        await RollbackStagedInsert(sm).CAF();
+                        await RollbackStagedInsert(sm, traceSpan.Item).CAF();
                         break;
                     case StagedMutationType.Remove:
                     case StagedMutationType.Replace:
-                        await RollbackStagedReplaceOrRemove(sm).CAF();
+                        await RollbackStagedReplaceOrRemove(sm, traceSpan.Item).CAF();
                         break;
                     default:
                         throw new InvalidOperationException(sm.Type + " is not a supported mutation type for rollback.");
@@ -1168,11 +1204,13 @@ namespace Couchbase.Transactions
                 }
             }
 
-            await SetAtrRolledBack().CAF();
+            await SetAtrRolledBack(traceSpan.Item).CAF();
         }
 
-        private async Task RollbackStagedInsert(StagedMutation sm)
+        private async Task RollbackStagedInsert(StagedMutation sm, IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#RollbackAsync-Staged-InsertAsync
             await RepeatUntilSuccessOrThrow(async () =>
             {
@@ -1210,8 +1248,10 @@ namespace Couchbase.Transactions
             }).CAF();
         }
 
-        private async Task RollbackStagedReplaceOrRemove(StagedMutation sm)
+        private async Task RollbackStagedReplaceOrRemove(StagedMutation sm, IRequestSpan? parentSpan)
         {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A?view#RollbackAsync-Staged-ReplaceAsync-or-RemoveAsync
             await RepeatUntilSuccessOrThrow(async () =>
             {
@@ -1276,9 +1316,10 @@ namespace Couchbase.Transactions
             }
         }
 
-        protected async Task InitAtrIfNeeded(ICouchbaseCollection collection, string id)
+        protected async Task InitAtrIfNeeded(ICouchbaseCollection collection, string id, IRequestSpan? parentSpan)
         {
-            var atrCollection = await collection.Scope.Bucket.DefaultCollectionAsync();
+            using var traceSpan = TraceSpan(parent: parentSpan);
+            var atrCollection = collection.Scope.Bucket.DefaultCollection();
             var testHookAtrId = await _testHooks.AtrIdForVBucket(this, AtrIds.GetVBucketId(id));
             var atrId = AtrIds.GetAtrId(id);
             lock (_initAtrLock)
@@ -1290,6 +1331,7 @@ namespace Couchbase.Transactions
                     atrCollection: atrCollection,
                     atrId: atrId,
                     atrDurability: _config.DurabilityLevel,
+                    loggerFactory: _loggerFactory,
                     testHookAtrId: testHookAtrId);
             }
         }
@@ -1330,12 +1372,12 @@ namespace Couchbase.Transactions
                 var hook = _testHooks.HasExpiredClientSideHook(this, hookPoint, docId);
                 if (over)
                 {
-                    Logger.LogInformation("expired in stage {hookPoint} / {attemptId}", hookPoint, AttemptId);
+                    Logger.LogInformation("expired in stage {hookPoint} / attemptId = {attemptId}", hookPoint, AttemptId);
                 }
 
                 if (hook)
                 {
-                    Logger.LogInformation("fake expiry in stage {hookPoint} / {attemptId}", hookPoint, AttemptId);
+                    Logger.LogInformation("fake expiry in stage {hookPoint} / attemptId = {attemptId}", hookPoint, AttemptId);
                 }
 
                 return over || hook;
@@ -1347,12 +1389,13 @@ namespace Couchbase.Transactions
             }
         }
 
-        internal async Task CheckWriteWriteConflict(TransactionGetResult gr, string interactionPoint)
+        internal async Task CheckWriteWriteConflict(TransactionGetResult gr, string interactionPoint, IRequestSpan? parentSpan)
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#CheckWriteWriteConflict
             // This logic checks and handles a document X previously read inside a transaction, A, being involved in another transaction B.
             // It takes a TransactionGetResult gr variable.
 
+            using var traceSpan = TraceSpan(parent: parentSpan);
             var sw = Stopwatch.StartNew();
             await RepeatUntilSuccessOrThrow(async () =>
             {
@@ -1541,6 +1584,9 @@ namespace Couchbase.Transactions
             Logger.LogInformation("Adding collection for {col}/{atr} to run at {when}", Redactor.UserData(cleanupRequest.AtrCollection.Name), cleanupRequest.AtrId, cleanupRequest.WhenReadyToBeProcessed);
             return cleanupRequest;
         }
+
+        private DelegatingDisposable<IRequestSpan> TraceSpan([CallerMemberName] string method = "RootSpan", IRequestSpan? parent = null)
+            => new DelegatingDisposable<IRequestSpan>(_requestTracer.RequestSpan(method, parent), Logger.BeginMethodScope(method));
     }
 }
 

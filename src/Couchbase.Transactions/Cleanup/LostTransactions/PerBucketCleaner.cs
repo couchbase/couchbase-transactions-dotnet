@@ -268,6 +268,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                     case ErrorClass.FailDocNotFound:
                     case ErrorClass.FailPathNotFound:
                         // If the ATR is not present, continue as success.
+                        _logger.LogDebug("ATR {atrId} not present: {ec}", atrId, ec);
                         return;
                     default:
                         // Else if there’s an error, continue as success.

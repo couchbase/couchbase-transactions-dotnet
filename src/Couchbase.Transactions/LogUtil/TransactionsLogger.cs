@@ -32,7 +32,7 @@ namespace Couchbase.Transactions.LogUtil
             _otherLogger.Log(logLevel, eventId, state, exception, formatter);
             if (IsEnabled(logLevel))
             {
-                _overallContext.AddLog($"[{DateTimeOffset.UtcNow}] [{logLevel}] {formatter(state, exception)}");
+                _overallContext.AddLog($"[{DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss.ff}] [{logLevel}] {formatter(state, exception)}");
             }
         }
     }

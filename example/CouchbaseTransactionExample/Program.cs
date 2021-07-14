@@ -25,8 +25,8 @@ namespace CouchbaseTransactionExample
                     Password = "password"
                 };
 
-                await using var cluster =
-                    await Cluster.ConnectAsync("couchbase://localhost", clusterOptions);
+                var connectionString = "couchbase://localhost";
+                await using var cluster = await Cluster.ConnectAsync(connectionString, clusterOptions);
                 await using var bucket = await cluster.BucketAsync("default");
                 var collection = await bucket.DefaultCollectionAsync();
                 var sampleDoc = new ExampleTransactionDocument();
@@ -36,7 +36,9 @@ namespace CouchbaseTransactionExample
                 var getResultRoundTrip = await collection.GetAsync(sampleDoc.Id).ConfigureAwait(false);
                 var roundTripSampleDoc = getResultRoundTrip.ContentAs<ExampleTransactionDocument>();
 
-                Serilog.Log.Logger = new Serilog.LoggerConfiguration().WriteTo.Console().CreateLogger();
+                Serilog.Log.Logger = new Serilog.LoggerConfiguration()
+                    .Enrich.FromLogContext()
+                    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss.fff} {Level:u3}] |{Properties:j}| [{SourceContext:l}] {Message:lj}{NewLine}{Exception}").CreateLogger();
                 var configBuilder = TransactionConfigBuilder.Create()
                     .LoggerFactory(new SerilogLoggerFactory())
                     .DurabilityLevel(DurabilityLevel.None);
@@ -47,18 +49,27 @@ namespace CouchbaseTransactionExample
                 }
 
                 var txn = Transactions.Create(cluster, configBuilder.Build());
-                var txnResult = await txn.RunAsync(async ctx =>
+                for (int i = 0; i < 1; i++)
                 {
-                    var getResult = await ctx.GetAsync(collection, sampleDoc.Id).ConfigureAwait(false);
-                    var docGet = getResult.ContentAs<JObject>();
+                    var sw = Stopwatch.StartNew();
+                    var txnResult = await txn.RunAsync(async ctx =>
+                    {
+                        var getResult = await ctx.GetAsync(collection, sampleDoc.Id).ConfigureAwait(false);
+                        var docGet = getResult.ContentAs<JObject>();
 
-                    docGet["revision"] = docGet["revision"].Value<int>() + 1;
-                    var replaceResult = await ctx.ReplaceAsync(getResult, docGet).ConfigureAwait(false);
+                        var insertResult = await ctx.InsertAsync(collection, Guid.NewGuid().ToString(), docGet);
 
-                    await ctx.CommitAsync();
-                }).ConfigureAwait(false);
+                        docGet["revision"] = docGet["revision"].Value<int>() + 1;
+                        var replaceResult1 = await ctx.ReplaceAsync(insertResult, docGet).ConfigureAwait(false);
+                        var replaceResult2 = await ctx.ReplaceAsync(getResult, docGet).ConfigureAwait(false);
 
-                Console.Out.WriteLine(txnResult.ToString());
+                        // Commit happens automatically at this point.  You don't need to call it explicitly.
+                    }).ConfigureAwait(false);
+                    sw.Stop();
+
+                    Console.Out.WriteLine(txnResult.ToString());
+                    Console.Out.WriteLine($"Elapsed = {sw.Elapsed.TotalMilliseconds}ms");
+                }
             }
             catch (Exception e)
             {

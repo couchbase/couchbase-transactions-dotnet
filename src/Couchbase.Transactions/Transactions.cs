@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Couchbase.Core.Diagnostics.Tracing;
 using Couchbase.Core.Logging;
 using Couchbase.Core.Retry;
 using Couchbase.Transactions.Cleanup;
@@ -36,6 +37,7 @@ namespace Couchbase.Transactions
         private readonly CleanupWorkQueue _cleanupWorkQueue;
         private readonly Cleaner _cleaner;
         private readonly IAsyncDisposable? _lostTransactionsCleanup;
+        private readonly IRequestTracer _requestTracer;
 
         /// <summary>
         /// Gets the <see cref="TransactionConfig"/> to apply to all transaction runs from this instance.
@@ -70,6 +72,7 @@ namespace Couchbase.Transactions
             _cluster = cluster ?? throw new ArgumentNullException(nameof(cluster));
             Config = config ?? throw new ArgumentNullException(nameof(config));
             _redactor = _cluster.ClusterServices?.GetService(typeof(IRedactor)) as IRedactor ?? throw new ArgumentNullException(nameof(IRedactor), "Redactor implementation not registered.");
+            _requestTracer = cluster.ClusterServices?.GetService(typeof(IRequestTracer)) as IRequestTracer ?? new NoopRequestTracer();
             Interlocked.Increment(ref InstancesCreated);
             if (config.CleanupLostAttempts)
             {
@@ -138,8 +141,11 @@ namespace Couchbase.Transactions
         {
             // https://hackmd.io/foGjnSSIQmqfks2lXwNp8w?view#The-Core-Loop
 
+            var txId = Guid.NewGuid().ToString();
+            using var rootSpan = _requestTracer.RequestSpan(nameof(RunAsync))
+                .SetAttribute(Support.TransactionFields.TransactionId, txId);
             var overallContext = new TransactionContext(
-                transactionId: Guid.NewGuid().ToString(),
+                transactionId: txId,
                 startTime: DateTimeOffset.UtcNow,
                 config: Config,
                 perConfig: perConfig
@@ -153,7 +159,7 @@ namespace Couchbase.Transactions
             {
                 try
                 {
-                    await ExecuteApplicationLambda(transactionLogic, overallContext, loggerFactory, result).CAF();
+                    await ExecuteApplicationLambda(transactionLogic, overallContext, loggerFactory, result, rootSpan).CAF();
                     return result;
                 }
                 catch (TransactionOperationFailedException ex)
@@ -209,19 +215,23 @@ namespace Couchbase.Transactions
             throw new InvalidOperationException("Loop should not have exited without expiration.");
         }
 
-        private async Task ExecuteApplicationLambda(Func<AttemptContext, Task> transactionLogic, TransactionContext overallContext, ILoggerFactory loggerFactory, TransactionResult result)
+        private async Task ExecuteApplicationLambda(Func<AttemptContext, Task> transactionLogic, TransactionContext overallContext, ILoggerFactory loggerFactory, TransactionResult result, IRequestSpan parentSpan)
         {
+            var attemptid = Guid.NewGuid().ToString();
+            using var traceSpan = parentSpan.ChildSpan(nameof(ExecuteApplicationLambda))
+                .SetAttribute(Support.TransactionFields.AttemptId, attemptid);
             var delegatingLoggerFactory = new LogUtil.TransactionsLoggerFactory(loggerFactory, overallContext);
             var memoryLogger = delegatingLoggerFactory.CreateLogger(nameof(ExecuteApplicationLambda));
             var ctx = new AttemptContext(
                 overallContext,
                 Config,
-                Guid.NewGuid().ToString(),
+                attemptid,
                 TestHooks,
                 _redactor,
                 delegatingLoggerFactory,
                 DocumentRepository,
-                AtrRepository
+                AtrRepository,
+                requestTracer: _requestTracer
             );
 
             try
@@ -229,7 +239,7 @@ namespace Couchbase.Transactions
                 try
                 {
                     await transactionLogic(ctx).CAF();
-                    await ctx.AutoCommit().CAF();
+                    await ctx.AutoCommit(traceSpan).CAF();
                 }
                 catch (TransactionOperationFailedException)
                 {
@@ -259,7 +269,7 @@ namespace Couchbase.Transactions
                     try
                     {
                         memoryLogger.LogWarning("Attempt failed, attempting automatic rollback...");
-                        await ctx.RollbackInternal(isAppRollback: false).CAF();
+                        await ctx.RollbackInternal(isAppRollback: false, parentSpan: traceSpan).CAF();
                     }
                     catch (Exception rollbackEx)
                     {
@@ -297,6 +307,7 @@ namespace Couchbase.Transactions
             finally
             {
                 result.UnstagingComplete = ctx.UnstagingComplete;
+                memoryLogger.LogInformation("Attempt {attemptId} completed.  CleanupClient={cleanupClientAttempts}, LostCleanup={lostCleanup}", ctx.AttemptId, Config.CleanupClientAttempts, Config.CleanupLostAttempts);
                 if (Config.CleanupClientAttempts)
                 {
                     memoryLogger.LogInformation("Adding cleanup request for {attemptId}", ctx.AttemptId);

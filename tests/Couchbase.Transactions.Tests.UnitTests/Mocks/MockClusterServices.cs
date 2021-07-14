@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Couchbase.Core.Diagnostics.Tracing;
 using Couchbase.Core.IO.Operations;
 using Couchbase.Core.IO.Serializers;
 using Couchbase.Core.IO.Transcoders;
@@ -17,9 +18,10 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
     {
         private Dictionary<Type, object> _services = new Dictionary<Type, object>()
         {
-            {typeof(IRedactor), new MockRedactor()}, 
+            {typeof(IRedactor), new MockRedactor()},
             {typeof(ITypeTranscoder), new MockTranscoder()},
-            {typeof(ILoggerFactory), new MockLoggerFactory()}
+            {typeof(ILoggerFactory), new MockLoggerFactory()},
+            {typeof(IRequestTracer), new NoopRequestTracer()},
         };
 
         public object GetService(Type serviceType)

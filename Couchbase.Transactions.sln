@@ -11,6 +11,13 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CouchbaseTransactionExample
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase.Transactions.Tests.IntegrationTests", "tests\IntegrationTests\Couchbase.Transactions.Tests.IntegrationTests.csproj", "{AF2343F2-9D92-40DF-A1E1-EDB8F11439AD}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Couchbase", "..\couchbase-net-client\src\Couchbase\Couchbase.csproj", "{329746B1-7920-49E1-94A6-0AD09E7F0CDB}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Build", "Build", "{4E2D5E5F-F221-4AAA-99D5-27E9ACBFB1B4}"
+	ProjectSection(SolutionItems) = preProject
+		Directory.Build.props = Directory.Build.props
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -33,6 +40,10 @@ Global
 		{AF2343F2-9D92-40DF-A1E1-EDB8F11439AD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{AF2343F2-9D92-40DF-A1E1-EDB8F11439AD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{AF2343F2-9D92-40DF-A1E1-EDB8F11439AD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{329746B1-7920-49E1-94A6-0AD09E7F0CDB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{329746B1-7920-49E1-94A6-0AD09E7F0CDB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{329746B1-7920-49E1-94A6-0AD09E7F0CDB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{329746B1-7920-49E1-94A6-0AD09E7F0CDB}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

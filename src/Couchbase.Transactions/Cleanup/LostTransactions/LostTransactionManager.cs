@@ -172,7 +172,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
             // TODO: Support ExtCustomMetadataCollection
             _logger.LogDebug("New cleaner for bucket {bkt}", bucketName);
             var bucket = await _cluster.BucketAsync(bucketName).CAF();
-            var collection = await bucket.DefaultCollectionAsync().CAF();
+            var collection = bucket.DefaultCollection();
             var repository = new CleanerRepository(collection, _keyValueTimeout);
             var cleaner = new Cleaner(_cluster, _keyValueTimeout, _loggerFactory, creatorName: nameof(LostTransactionManager));
 

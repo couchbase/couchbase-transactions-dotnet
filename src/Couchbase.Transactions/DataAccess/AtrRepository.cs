@@ -10,7 +10,9 @@ using Couchbase.Transactions.Components;
 using Couchbase.Transactions.Config;
 using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Error.External;
+using Couchbase.Transactions.LogUtil;
 using Couchbase.Transactions.Support;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
 namespace Couchbase.Transactions.DataAccess
@@ -32,6 +34,7 @@ namespace Couchbase.Transactions.DataAccess
         private readonly string _prefixedAtrFieldTimestampRollbackStart;
         private readonly string _prefixedAtrFieldTransactionId;
         private readonly DurabilityLevel? _atrDurability;
+        private readonly ILogger _logger;
 
         public string AtrId { get; }
 
@@ -39,7 +42,7 @@ namespace Couchbase.Transactions.DataAccess
 
         public ICouchbaseCollection Collection { get; }
 
-        public AtrRepository(string attemptId, TransactionContext overallContext, ICouchbaseCollection atrCollection, string atrId, DurabilityLevel? atrDurability, string? testHookAtrId = null)
+        public AtrRepository(string attemptId, TransactionContext overallContext, ICouchbaseCollection atrCollection, string atrId, DurabilityLevel? atrDurability, ILoggerFactory loggerFactory, string? testHookAtrId = null)
         {
             // Ugly test hook handling.
             AtrId = testHookAtrId ?? atrId;
@@ -59,7 +62,9 @@ namespace Couchbase.Transactions.DataAccess
             _prefixedAtrFieldTimestampRollbackComplete = $"{_atrRoot}.{TransactionFields.AtrFieldTimestampRollbackComplete}";
             _prefixedAtrFieldTimestampRollbackStart = $"{_atrRoot}.{TransactionFields.AtrFieldTimestampRollbackStart}";
             _prefixedAtrFieldTransactionId = $"{_atrRoot}.{TransactionFields.AtrFieldTransactionId}";
-            _atrDurability = atrDurability;
+            _logger = loggerFactory.CreateLogger<AtrRepository>();
+            _logger.LogDebug("Requested Durability = {durability}", atrDurability);
+            _atrDurability = atrDurability ?? DurabilityLevel.Majority;
         }
 
         public Task<AtrEntry?> FindEntryForTransaction(ICouchbaseCollection atrCollection, string atrId, string? attemptId = null)
@@ -119,25 +124,28 @@ namespace Couchbase.Transactions.DataAccess
             }
 
             var bkt = await anyCollection.Scope.Bucket.Cluster.BucketAsync(atrRef.BucketName).CAF();
-            var scp = atrRef.ScopeName != null ? await bkt.ScopeAsync(atrRef.ScopeName) : await bkt.DefaultScopeAsync();
+            var scp = atrRef.ScopeName != null ? bkt.Scope(atrRef.ScopeName) : bkt.DefaultScope();
 
-            return await scp.CollectionAsync(atrRef.CollectionName);
+            return scp.Collection(atrRef.CollectionName);
         }
 
         public Task<ICouchbaseCollection?> GetAtrCollection(AtrRef atrRef) => GetAtrCollection(atrRef, Collection);
 
         public async Task MutateAtrComplete()
         {
+            using var logScope = _logger.BeginMethodScope();
             var specs = new[]
             {
                 MutateInSpec.Remove(_atrRoot, isXattr: true)
             };
 
             _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
+            _logger.LogInformation("Removed ATR {atr}/{atrRoot}", AtrId, _atrRoot);
         }
 
         public async Task MutateAtrPending(ulong exp)
         {
+            using var logScope = _logger.BeginMethodScope();
             var specs = new[]
             {
                 MutateInSpec.Insert(_prefixedAtrFieldTransactionId,
@@ -149,11 +157,13 @@ namespace Couchbase.Transactions.DataAccess
                             createPath: false, isXattr: true),
             };
 
-            _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Upsert)).CAF();
+            var mutateResult = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Upsert)).CAF();
+            _logger.LogInformation("Upserted ATR to PENDING {atr}/{atrRoot} (cas = {cas})", AtrId, _atrRoot, mutateResult.Cas);
         }
 
         public async Task MutateAtrCommit(IEnumerable<StagedMutation> stagedMutations)
         {
+            using var logScope = _logger.BeginMethodScope();
             (var inserts, var replaces, var removes) = SplitMutationsForStaging(stagedMutations);
 
             var specs = new []
@@ -171,11 +181,13 @@ namespace Couchbase.Transactions.DataAccess
                     isXattr: true)
             };
 
-            _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
+            var mutateResult = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
+            _logger.LogDebug("Updated to COMMITTED ATR {atr}/{atrRoot} (cas = {cas})", AtrId, _atrRoot, mutateResult.Cas);
         }
 
         public async Task MutateAtrAborted(IEnumerable<StagedMutation> stagedMutations)
         {
+            using var logScope = _logger.BeginMethodScope();
             (var inserts, var replaces, var removes) = SplitMutationsForStaging(stagedMutations);
 
             var specs = new MutateInSpec[]
@@ -187,17 +199,20 @@ namespace Couchbase.Transactions.DataAccess
                 MutateInSpec.Upsert(_prefixedAtrFieldDocsRemoved, removes, isXattr: true),
             };
 
-            _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
+            var mutateResult = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
+            _logger.LogDebug("Updated to ABORTED ATR {atr}/{atrRoot} (cas = {cas})", AtrId, _atrRoot, mutateResult.Cas);
         }
 
         public async Task MutateAtrRolledBack()
         {
+            using var logScope = _logger.BeginMethodScope();
             var specs = new MutateInSpec[]
             {
                 MutateInSpec.Remove(_atrRoot, isXattr: true),
             };
 
-            _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
+            var mutateResult = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
+            _logger.LogDebug("Removed ATR {atr}/{atrRoot} (cas = {cas})", AtrId, _atrRoot, mutateResult.Cas);
         }
 
         public async Task<string> LookupAtrState()
