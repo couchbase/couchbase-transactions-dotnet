@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -13,10 +14,13 @@ using Couchbase.Core;
 using Couchbase.Core.Diagnostics.Tracing;
 using Couchbase.Core.Exceptions;
 using Couchbase.Core.Exceptions.KeyValue;
+using Couchbase.Core.Exceptions.Query;
 using Couchbase.Core.IO.Operations;
+using Couchbase.Core.IO.Serializers;
 using Couchbase.Core.IO.Transcoders;
 using Couchbase.Core.Logging;
 using Couchbase.KeyValue;
+using Couchbase.Query;
 using Couchbase.Transactions.ActiveTransactionRecords;
 using Couchbase.Transactions.Cleanup;
 using Couchbase.Transactions.Components;
@@ -44,6 +48,7 @@ namespace Couchbase.Transactions
 {
     public class AttemptContext
     {
+        private static readonly TimeSpan ExpiryThreshold = TimeSpan.FromMilliseconds(10);
         private static readonly TimeSpan WriteWriteConflictTimeLimit = TimeSpan.FromSeconds(1);
         private readonly TransactionContext _overallContext;
         private readonly TransactionConfig _config;
@@ -53,7 +58,7 @@ namespace Couchbase.Transactions
         private readonly ErrorTriage _triage;
 
         private readonly List<StagedMutation> _stagedMutations = new List<StagedMutation>();
-        private readonly object _initAtrLock = new object();
+        private readonly object _initAtrLock = new();
         private IAtrRepository? _atr = null;
         private IDocumentRepository _docs;
         private readonly DurabilityLevel _effectiveDurabilityLevel;
@@ -61,7 +66,11 @@ namespace Couchbase.Transactions
         private readonly ConcurrentDictionary<long, TransactionOperationFailedException> _previousErrors = new ConcurrentDictionary<long, TransactionOperationFailedException>();
         private bool _expirationOvertimeMode = false;
         private readonly ILoggerFactory _loggerFactory;
+        private readonly ICluster _cluster;
+        private readonly ITypeSerializer _nonStreamingTypeSerializer;
         private readonly IRequestTracer _requestTracer;
+        private bool _queryMode = false;
+        private Uri? _lastDispatchedQueryNode = null;
 
         public string AttemptId { get; }
         public string TransactionId => _overallContext.TransactionId;
@@ -73,11 +82,14 @@ namespace Couchbase.Transactions
             string attemptId,
             ITestHooks? testHooks,
             IRedactor redactor,
-            Microsoft.Extensions.Logging.ILoggerFactory loggerFactory,
+            ILoggerFactory loggerFactory,
+            ICluster cluster,
             IDocumentRepository? documentRepository = null,
             IAtrRepository? atrRepository = null,
             IRequestTracer? requestTracer = null)
         {
+            _cluster = cluster;
+            _nonStreamingTypeSerializer = NonStreamingSerializerWrapper.FromCluster(_cluster);
             _requestTracer = requestTracer ?? new NoopRequestTracer();
             AttemptId = attemptId ?? throw new ArgumentNullException(nameof(attemptId));
             _overallContext = overallContext ?? throw new ArgumentNullException(nameof(overallContext));
@@ -122,7 +134,10 @@ namespace Couchbase.Transactions
         /// <param name="id">The ID of the document.</param>
         /// <param name="parentSpan">The optional parent tracing span.</param>
         /// <returns>A <see cref="TransactionGetResult"/> containing the document, or null if  not found.</returns>
-        public async Task<TransactionGetResult?> GetOptionalAsync(ICouchbaseCollection collection, string id, IRequestSpan? parentSpan = null)
+        public Task<TransactionGetResult?> GetOptionalAsync(ICouchbaseCollection collection, string id, IRequestSpan? parentSpan = null)
+            => _queryMode ? GetWithQuery(collection, id, parentSpan) : GetWithKv(collection, id, parentSpan);
+
+        private async Task<TransactionGetResult?> GetWithKv(ICouchbaseCollection collection, string id, IRequestSpan? parentSpan)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
             DoneCheck();
@@ -143,7 +158,7 @@ namespace Couchbase.Transactions
                     case StagedMutationType.Insert:
                     case StagedMutationType.Replace:
                         // LOGGER.info(attemptId, "found own-write of mutated doc %s", RedactableArgument.redactUser(id));
-                        return TransactionGetResult.FromOther(staged.Doc, new JObjectContentWrapper(staged.Content), TransactionJsonDocumentStatus.OwnWrite);
+                        return TransactionGetResult.FromOther(staged.Doc, new JObjectContentWrapper(staged.Content));
                     case StagedMutationType.Remove:
                         // LOGGER.info(attemptId, "found own-write of removed doc %s", RedactableArgument.redactUser(id));
                         return null;
@@ -158,7 +173,7 @@ namespace Couchbase.Transactions
                 {
                     await _testHooks.BeforeDocGet(this, id).CAF();
 
-                    var result = await GetWithMavAsync(collection, id, parentSpan: traceSpan.Item);
+                    var result = await GetWithMav(collection, id, parentSpan: traceSpan.Item);
 
                     await _testHooks.AfterGetComplete(this, id).CAF();
                     await ForwardCompatibility.Check(this, ForwardCompatibility.Gets, result?.TransactionXattrs?.ForwardCompatibility);
@@ -183,7 +198,48 @@ namespace Couchbase.Transactions
             }
         }
 
-        private async Task<TransactionGetResult?> GetWithMavAsync(ICouchbaseCollection collection, string id, string? resolveMissingAtrEntry = null, IRequestSpan? parentSpan = null)
+        private async Task<TransactionGetResult?> GetWithQuery(ICouchbaseCollection collection, string id, IRequestSpan? parentSpan)
+        {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+            try
+            {
+                var queryOptions = NonStreamingQuery().Parameter(MakeKeyspace(collection))
+                                                      .Parameter(id);
+                using var queryResult = await QueryWrapper<QueryGetResult>(0, null, "EXECUTE __get",
+                    options: queryOptions,
+                    hookPoint: ITestHooks.HOOK_QUERY_KV_GET,
+                    txdata: JObject.FromObject(new { kv = true }),
+                    parentSpan: traceSpan.Item).CAF();
+
+                var firstResult = await queryResult.FirstOrDefaultAsync().CAF();
+                if (firstResult == null)
+                {
+                    return null;
+                }
+
+                var getResult = TransactionGetResult.FromQueryGet(collection, id, firstResult);
+                Logger.LogDebug("GetWithQuery found doc (id = {id}, cas = {cas})", id, getResult.Cas);
+                return getResult;
+            }
+            catch (Exception err)
+            {
+                if (err is DocumentNotFoundException)
+                {
+                    return null;
+                }
+
+                if (err is TransactionOperationFailedException)
+                {
+                    throw;
+                }
+
+                var classified = CreateError(this, err.Classify(), err).Build();
+                SaveErrorWrapper(classified);
+                throw classified;
+            }
+        }
+
+        private async Task<TransactionGetResult?> GetWithMav(ICouchbaseCollection collection, string id, string? resolveMissingAtrEntry = null, IRequestSpan? parentSpan = null)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
             try
@@ -194,7 +250,7 @@ namespace Couchbase.Transactions
                     // Do a Sub-Document lookup, getting all transactional metadata, the “$document” virtual xattr,
                     // and the document’s body. Timeout is set as in Timeouts.
                     var docLookupResult = await _docs.LookupDocumentAsync(collection, id, fullDocument: true).CAF();
-                    Logger.LogDebug("{method} for {redactedId}, attemptId={attemptId}, postCas={postCas}", nameof(GetWithMavAsync), Redactor.UserData(id), AttemptId, docLookupResult.Cas);
+                    Logger.LogDebug("{method} for {redactedId}, attemptId={attemptId}, postCas={postCas}", nameof(GetWithMav), Redactor.UserData(id), AttemptId, docLookupResult.Cas);
                     if (docLookupResult == null)
                     {
                         return TransactionGetResult.Empty;
@@ -209,7 +265,7 @@ namespace Couchbase.Transactions
                         // Not in a transaction, or insufficient transaction metadata
                         return docLookupResult!.IsDeleted
                             ? TransactionGetResult.Empty
-                            : docLookupResult.GetPreTransactionResult(TransactionJsonDocumentStatus.Normal);
+                            : docLookupResult.GetPreTransactionResult();
                     }
 
                     if (resolveMissingAtrEntry == txn.Id?.AttemptId)
@@ -217,7 +273,7 @@ namespace Couchbase.Transactions
                         // This is our second attempt getting the document, and it’s in the same state as before
                         return docLookupResult!.IsDeleted
                             ? TransactionGetResult.Empty
-                            : docLookupResult.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnOther);
+                            : docLookupResult.GetPostTransactionResult();
                     }
 
                     resolveMissingAtrEntry = txn.Id?.AttemptId;
@@ -243,7 +299,7 @@ namespace Couchbase.Transactions
                         }
                         else
                         {
-                            return docLookupResult!.GetPostTransactionResult(TransactionJsonDocumentStatus.OwnWrite);
+                            return docLookupResult!.GetPostTransactionResult();
                         }
                     }
 
@@ -256,7 +312,7 @@ namespace Couchbase.Transactions
                             return TransactionGetResult.Empty;
                         }
 
-                        return docLookupResult!.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnCommitted);
+                        return docLookupResult!.GetPostTransactionResult();
                     }
 
                     if (docLookupResult!.IsDeleted || txn.Operation?.Type == "insert")
@@ -264,7 +320,7 @@ namespace Couchbase.Transactions
                         return TransactionGetResult.Empty;
                     }
 
-                    return docLookupResult.GetPreTransactionResult(TransactionJsonDocumentStatus.InTxnOther);
+                    return docLookupResult.GetPreTransactionResult();
                 }
                 catch (ActiveTransactionRecordEntryNotFoundException)
                 {
@@ -284,7 +340,7 @@ namespace Couchbase.Transactions
                     throw;
                 }
 
-                return await GetWithMavAsync(collection, id, resolveMissingAtrEntry).CAF();
+                return await GetWithMav(collection, id, resolveMissingAtrEntry).CAF();
             }
         }
 
@@ -319,7 +375,10 @@ namespace Couchbase.Transactions
         /// <param name="content">The updated content.</param>
         /// <param name="parentSpan">The optional parent tracing span.</param>
         /// <returns>A <see cref="TransactionGetResult"/> reflecting the updated content.</returns>
-        public async Task<TransactionGetResult> ReplaceAsync(TransactionGetResult doc, object content, IRequestSpan? parentSpan = null)
+        public Task<TransactionGetResult> ReplaceAsync(TransactionGetResult doc, object content, IRequestSpan? parentSpan = null)
+            => _queryMode ? ReplaceWithQuery(doc, content, parentSpan) : ReplaceWithKv(doc, content, parentSpan);
+
+        private async Task<TransactionGetResult> ReplaceWithKv(TransactionGetResult doc, object content, IRequestSpan? parentSpan)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
             DoneCheck();
@@ -330,6 +389,59 @@ namespace Couchbase.Transactions
             await SetAtrPendingIfFirstMutation(doc.Collection, traceSpan.Item);
 
             return await CreateStagedReplace(doc, content, accessDeleted: doc.IsDeleted, parentSpan: traceSpan.Item);
+        }
+        private async Task<TransactionGetResult> ReplaceWithQuery(TransactionGetResult doc, object content, IRequestSpan? parentSpan)
+        {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+
+            JObject txdata = TxDataForReplaceAndRemove(doc);
+
+            try
+            {
+                var queryOptions = NonStreamingQuery().Parameter(MakeKeyspace(doc.Collection))
+                                               .Parameter(doc.Id)
+                                               .Parameter(content)
+                                               .Parameter(new { });
+                using var queryResult = await QueryWrapper<QueryGetResult>(0, null, "EXECUTE __update",
+                    options: queryOptions,
+                    hookPoint: ITestHooks.HOOK_QUERY_KV_REPLACE,
+                    txdata: txdata,
+                    parentSpan: traceSpan.Item).CAF();
+
+                var firstResult = await queryResult.FirstOrDefaultAsync().CAF();
+                if (firstResult == null)
+                {
+                    throw new DocumentNotFoundException();
+                }
+
+                var getResult = TransactionGetResult.FromQueryGet(doc.Collection, doc.Id, firstResult);
+                return getResult;
+            }
+            catch (Exception err)
+            {
+                var builder = CreateError(this, err.Classify(), err);
+                if (err is DocumentNotFoundException || err is CasMismatchException)
+                {
+                    builder.RetryTransaction();
+                }
+
+                var toThrow = builder.Build();
+                SaveErrorWrapper(toThrow);
+                throw toThrow;
+            }
+        }
+
+        private static JObject TxDataForReplaceAndRemove(TransactionGetResult doc)
+        {
+            var txdata = new JObject(
+                new JProperty("kv", true),
+                new JProperty("scas", doc.Cas.ToString(CultureInfo.InvariantCulture)));
+            if (doc.TxnMeta != null)
+            {
+                txdata.Add(new JProperty("txnMeta", doc.TxnMeta));
+            }
+
+            return txdata;
         }
 
         private async Task SetAtrPendingIfFirstMutation(ICouchbaseCollection collection, IRequestSpan? parentSpan)
@@ -413,7 +525,10 @@ namespace Couchbase.Transactions
         /// <param name="content">The content of the new document.</param>
         /// <param name="parentSpan">The optional parent tracing span.</param>
         /// <returns>A <see cref="TransactionGetResult"/> representing the inserted document.</returns>
-        public async Task<TransactionGetResult> InsertAsync(ICouchbaseCollection collection, string id, object content, IRequestSpan? parentSpan = null)
+        public Task<TransactionGetResult> InsertAsync(ICouchbaseCollection collection, string id, object content, IRequestSpan? parentSpan = null)
+            => _queryMode ? InsertWithQuery(collection, id, content, parentSpan) : InsertWithKv(collection, id, content, parentSpan);
+
+        private async Task<TransactionGetResult> InsertWithKv(ICouchbaseCollection collection, string id, object content, IRequestSpan? parentSpan)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
             using var logScope = Logger.BeginMethodScope();
@@ -435,6 +550,51 @@ namespace Couchbase.Transactions
 
 
             return await CreateStagedInsert(collection, id, content, parentSpan: traceSpan.Item).CAF();
+        }
+
+        private async Task<TransactionGetResult> InsertWithQuery(ICouchbaseCollection collection, string id, object content, IRequestSpan? parentSpan)
+        {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+
+            try
+            {
+                var queryOptions = NonStreamingQuery().Parameter(MakeKeyspace(collection))
+                                               .Parameter(id)
+                                               .Parameter(content)
+                                               .Parameter(new { });
+                using var queryResult = await QueryWrapper<QueryInsertResult>(0, null, "EXECUTE __insert",
+                    options: queryOptions,
+                    hookPoint: ITestHooks.HOOK_QUERY_KV_INSERT,
+                    txdata: JObject.FromObject(new { kv = true }),
+                    parentSpan: traceSpan.Item).CAF();
+
+                var firstResult = await queryResult.FirstOrDefaultAsync().CAF();
+                if (firstResult == null)
+                {
+                    throw new DocumentNotFoundException();
+                }
+
+                var getResult = TransactionGetResult.FromQueryInsert(collection, id, content, firstResult);
+                return getResult;
+
+            }
+            catch (Exception err)
+            {
+                if (err is TransactionOperationFailedException)
+                {
+                    throw;
+                }
+
+                if (err is DocumentExistsException)
+                {
+                    throw;
+                }
+
+                var builder = CreateError(this, err.Classify(), err);
+                var toThrow = builder.Build();
+                SaveErrorWrapper(toThrow);
+                throw toThrow;
+            }
         }
 
         private async Task<TransactionGetResult> CreateStagedInsert(ICouchbaseCollection collection, string id, object content, ulong? cas = null, IRequestSpan? parentSpan = null)
@@ -490,7 +650,6 @@ namespace Couchbase.Transactions
                             case ErrorClass.FailDocAlreadyExists:
                                 var repeatAction = await RepeatUntilSuccessOrThrow<RepeatAction>(async () =>
                                 {
-                                    // handle FAIL_DOC_ALREADY_EXISTS
                                     try
                                     {
                                         Logger.LogDebug("{method}.HandleDocExists for {redactedId}, attemptId={attemptId}, preCas={preCas}", nameof(CreateStagedInsert), Redactor.UserData(id), AttemptId, 0);
@@ -525,7 +684,7 @@ namespace Couchbase.Transactions
                                         else
                                         {
                                             // Else call the CheckWriteWriteConflict logic, which conveniently does everything we need to handle the above cases.
-                                            var getResult = docWithMeta!.GetPostTransactionResult(TransactionJsonDocumentStatus.InTxnOther);
+                                            var getResult = docWithMeta!.GetPostTransactionResult();
                                             await CheckWriteWriteConflict(getResult, ForwardCompatibility.WriteWriteConflictInserting, traceSpan.Item).CAF();
 
                                             // If this logic succeeds, we are ok to overwrite the doc.
@@ -621,7 +780,10 @@ namespace Couchbase.Transactions
         /// <param name="doc">The <see cref="TransactionGetResult"/> of a document previously looked up in this transaction.</param>
         /// <param name="parentSpan">The optional parent tracing span.</param>
         /// <returns>A task representing the asynchronous work.</returns>
-        public async Task RemoveAsync(TransactionGetResult doc, IRequestSpan? parentSpan = null)
+        public Task RemoveAsync(TransactionGetResult doc, IRequestSpan? parentSpan = null)
+            => _queryMode ? RemoveWithQuery(doc, parentSpan) : RemoveWithKv(doc, parentSpan);
+
+        private async Task RemoveWithKv(TransactionGetResult doc, IRequestSpan? parentSpan = null)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
             DoneCheck();
@@ -638,6 +800,44 @@ namespace Couchbase.Transactions
             await InitAtrIfNeeded(doc.Collection, doc.Id, traceSpan.Item);
             await SetAtrPendingIfFirstMutation(doc.Collection, traceSpan.Item).CAF();
             await CreateStagedRemove(doc, traceSpan.Item).CAF();
+        }
+
+        private async Task RemoveWithQuery(TransactionGetResult doc, IRequestSpan? parentSpan)
+        {
+            _ = doc ?? throw new ArgumentNullException(nameof(doc));
+            using var traceSpan = TraceSpan(parent: parentSpan);
+            JObject txdata = TxDataForReplaceAndRemove(doc);
+
+            try
+            {
+                var queryOptions = NonStreamingQuery().Parameter(MakeKeyspace(doc.Collection))
+                                                      .Parameter(doc.Id)
+                                                      .Parameter(new { });
+                using var queryResult = await QueryWrapper<QueryGetResult>(0, null, "EXECUTE __delete",
+                    options: queryOptions,
+                    hookPoint: ITestHooks.HOOK_QUERY_KV_REMOVE,
+                    txdata: txdata,
+                    parentSpan: traceSpan.Item).CAF();
+
+                _ = await queryResult.FirstOrDefaultAsync().CAF();
+            }
+            catch (Exception err)
+            {
+                if (err is TransactionOperationFailedException)
+                {
+                    throw;
+                }
+
+                var builder = CreateError(this, err.Classify(), err);
+                if (err is DocumentNotFoundException || err is CasMismatchException)
+                {
+                    builder.RetryTransaction();
+                }
+
+                var toThrow = builder.Build();
+                SaveErrorWrapper(toThrow);
+                throw toThrow;
+            }
         }
 
         private async Task CreateStagedRemove(TransactionGetResult doc, IRequestSpan? parentSpan)
@@ -698,7 +898,10 @@ namespace Couchbase.Transactions
             }
         }
 
-        public async Task CommitAsync(IRequestSpan? parentSpan = null)
+        public Task CommitAsync(IRequestSpan? parentSpan = null)
+            => _queryMode ? CommitWithQuery(parentSpan) : CommitWithKv(parentSpan);
+
+        private async Task CommitWithKv(IRequestSpan? parentSpan)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
             if (!_previousErrors.IsEmpty)
@@ -719,6 +922,36 @@ namespace Couchbase.Transactions
             await SetAtrCommit(traceSpan.Item).CAF();
             await UnstageDocs(traceSpan.Item).CAF();
             await SetAtrComplete(traceSpan.Item).CAF();
+        }
+
+        private async Task CommitWithQuery(IRequestSpan? parentSpan)
+        {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+            try
+            {
+                await QueryWrapper<object>(
+                    statementId: 0,
+                    scope: null,
+                    statement: "COMMIT",
+                    options: new QueryOptions(),
+                    hookPoint: ITestHooks.HOOK_QUERY_COMMIT,
+                    parentSpan: traceSpan.Item).CAF();
+                _state = AttemptStates.COMPLETED;
+            }
+            catch (Exception err)
+            {
+                // Set isDone to true?
+                var ec = err.Classify();
+                if (ec == ErrorClass.FailExpiry)
+                {
+                    throw CreateError(this, ec, err)
+                        .RaiseException(TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous)
+                        .DoNotRollbackAttempt()
+                        .Build();
+                }
+
+                throw CreateError(this, ec, err).DoNotRollbackAttempt().Build();
+            }
         }
 
         private async Task SetAtrComplete(IRequestSpan? parentSpan)
@@ -786,7 +1019,6 @@ namespace Couchbase.Transactions
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
 
-            // TODO: Updated spec.
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#Unstaging-Removes
             int retryCount = -1;
             await RepeatUntilSuccessOrThrow(async () =>
@@ -1135,30 +1367,28 @@ namespace Couchbase.Transactions
         /// <remarks>Calling this method on AttemptContext is usually unnecessary, as unhandled exceptions will trigger a rollback automatically.</remarks>
         public Task RollbackAsync(IRequestSpan? parentSpan = null) => this.RollbackInternal(true, parentSpan);
 
-        internal TransactionAttempt ToAttempt()
+        public async Task<IQueryResult<T>> QueryAsync<T>(string statement, TransactionQueryOptions options, IScope? scope = null, IRequestSpan? parentSpan = null)
         {
-            var atrInfo = _atr == null
-                ? default
-                : new DocRecord(_atr.BucketName, _atr.ScopeName, _atr.CollectionName,
-                    _atr.AtrId);
+            var traceSpan = TraceSpan(parent: parentSpan);
+            long fixmeStatementId = 0;
+            var results = await QueryWrapper<T>(
+                statementId: fixmeStatementId,
+                scope: scope,
+                statement: statement,
+                options: options.Builder,
+                hookPoint: ITestHooks.HOOK_QUERY,
+                parentSpan: traceSpan.Item
+                );
 
-            var ta = new TransactionAttempt()
-            {
-                AttemptId = AttemptId,
-                AtrRecord = atrInfo,
-                FinalState = _state,
-                MutationTokens = _finalMutations.ToArray(),
-                StagedInsertedIds = StagedInserts.Select(sm => sm.Doc.Id).ToArray(),
-                StagedRemoveIds = StagedRemoves.Select(sm => sm.Doc.Id).ToArray(),
-                StagedReplaceIds = StagedReplaces.Select(sm => sm.Doc.Id).ToArray()
-            };
-
-            return ta;
+            return results;
         }
 
         protected bool IsDone => _state != AttemptStates.NOTHING_WRITTEN && _state != AttemptStates.PENDING;
 
-        internal async Task RollbackInternal(bool isAppRollback, IRequestSpan? parentSpan)
+        internal Task RollbackInternal(bool isAppRollback, IRequestSpan? parentSpan)
+            => _queryMode ? RollbackWithQuery(isAppRollback, parentSpan) : RollbackWithKv(isAppRollback, parentSpan);
+
+        internal async Task RollbackWithKv(bool isAppRollback, IRequestSpan? parentSpan)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
 
@@ -1205,6 +1435,40 @@ namespace Couchbase.Transactions
             }
 
             await SetAtrRolledBack(traceSpan.Item).CAF();
+        }
+
+        internal async Task RollbackWithQuery(bool isAppRollback, IRequestSpan? parentSpan)
+        {
+            var traceSpan = TraceSpan(parent: parentSpan);
+            try
+            {
+                var queryOptions = NonStreamingQuery();
+                _ = await QueryWrapper<object>(0, null, "ROLLBACK", queryOptions,
+                    hookPoint: ITestHooks.HOOK_QUERY_ROLLBACK,
+                    parentSpan: traceSpan.Item,
+                    existingErrorCheck: false).CAF();
+                _state = AttemptStates.ROLLED_BACK;
+            }
+            catch (Exception err)
+            {
+                // TODO: Set isDone = true
+                if (err is TransactionOperationFailedException)
+                {
+                    throw;
+                }
+
+                if (err is AttemptNotFoundOnQueryException)
+                {
+                    // treat as success
+                    _state = AttemptStates.ROLLED_BACK;
+                }
+
+                var toSave = CreateError(this, err.Classify(), err)
+                    .DoNotRollbackAttempt()
+                    .Build();
+                SaveErrorWrapper(toSave);
+                throw toSave;
+            }
         }
 
         private async Task RollbackStagedInsert(StagedMutation sm, IRequestSpan? parentSpan)
@@ -1444,7 +1708,6 @@ namespace Couchbase.Transactions
                 {
                     // we couldn't get the ATR collection, which means that the entry was bad
                     // --OR-- the bucket/collection/scope was deleted/locked/rebalanced
-                    // TODO: the spec gives no method of handling this.
                     throw CreateError(this, ErrorClass.FailHard)
                         .Cause(new Exception(
                             $"ATR entry '{Redactor.UserData(gr?.TransactionXattrs?.AtrRef?.ToString())}' could not be read.",
@@ -1497,6 +1760,280 @@ namespace Couchbase.Transactions
                 return RepeatAction.RepeatWithBackoff;
             }).CAF();
         }
+
+        private QueryOptions NonStreamingQuery() => new QueryOptions() { Serializer = _nonStreamingTypeSerializer };
+
+        private async Task<IQueryResult<T>> QueryWrapper<T>(
+                long statementId,
+                IScope? scope,
+                string statement,
+                QueryOptions options,
+                string hookPoint,
+                IRequestSpan? parentSpan,
+                bool isBeginWork = false,
+                bool existingErrorCheck = true,
+                JObject? txdata = null,
+                bool txImplicit = false
+            )
+        {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+            traceSpan.Item?.SetAttribute("db.statement", statement)
+                          ?.SetAttribute("db.couchbase.transactions.tximplicit", txImplicit);
+
+            Logger.LogDebug("[{attemptId}] Executing Query: {hookPoint}: {txdata}", AttemptId, hookPoint, Redactor.UserData(txdata?.ToString()));
+
+            if (!_queryMode && !isBeginWork)
+            {
+                await QueryBeginWork(traceSpan?.Item).CAF();
+                _queryMode = true;
+            }
+
+            QueryPreCheck(statement, hookPoint, existingErrorCheck);
+
+            if (!isBeginWork)
+            {
+                options = options.Raw("txid", AttemptId);
+                if (_lastDispatchedQueryNode != null)
+                {
+                    options.LastDispatchedNode = _lastDispatchedQueryNode;
+                }
+            }
+
+            if (txdata != null)
+            {
+                options = options.Raw("txdata", txdata);
+            }
+
+            options = options.Metrics(true);
+            try
+            {
+                await _testHooks.BeforeQuery(this, statement).CAF();
+                IQueryResult<T> results = scope != null
+                    ? await scope.QueryAsync<T>(statement, options).CAF()
+                    : await _cluster.QueryAsync<T>(statement, options).CAF();
+                await _testHooks.AfterQuery(this, statement).CAF();
+                if (results.MetaData?.Status == QueryStatus.Fatal)
+                {
+                    var err = CreateError(this, ErrorClass.FailOther).Build();
+                    SaveErrorWrapper(err);
+                    throw err;
+                }
+
+                if (results.MetaData?.LastDispatchedToNode != null)
+                {
+                    _lastDispatchedQueryNode = results.MetaData.LastDispatchedToNode;
+                }
+
+                return results;
+            }
+            catch (Exception exByQuery)
+            {
+                Logger.LogError("[{attemptId}] query failed at {hookPoint}", AttemptId, hookPoint);
+                var converted = ConvertQueryError(exByQuery);
+                if (converted is TransactionOperationFailedException err)
+                {
+                    SaveErrorWrapper(err);
+                }
+
+                if (converted == null)
+                {
+                    throw;
+                }
+
+                throw converted;
+            }
+        }
+
+        private void QueryPreCheck(string statement, string hookPoint, bool existingErrorCheck)
+        {
+            DoneCheck();
+            if (existingErrorCheck)
+            {
+                CheckErrors();
+            }
+
+            var expiresSoon = _overallContext.RemainingUntilExpiration < ExpiryThreshold;
+            var docIdForHook = string.IsNullOrEmpty(statement) ? expiresSoon.ToString() : statement;
+            if (HasExpiredClientSide(docId: docIdForHook, hookPoint: hookPoint))
+            {
+                Logger.LogInformation("transaction has expired in stage '{stage}' remaining={remaining} threshold={threshold}",
+                    hookPoint, _overallContext.RemainingUntilExpiration.TotalMilliseconds, ExpiryThreshold.TotalMilliseconds);
+
+                throw CreateError(this, ErrorClass.FailExpiry)
+                    .RaiseException(TransactionOperationFailedException.FinalError.TransactionExpired)
+                    .DoNotRollbackAttempt()
+                    .Build();
+            }
+        }
+
+
+        public Exception? ConvertQueryError(Exception err)
+        {
+            if (err is Couchbase.Core.Exceptions.TimeoutException)
+            {
+                return new AttemptExpiredException(this, "attempt expired during query", err);
+            }
+            else if (err is CouchbaseException ce)
+            {
+                if (ce.Context is QueryErrorContext qec)
+                {
+                    if (qec.Errors?.Count >= 1)
+                    {
+                        var chosenError = ChooseQueryError(qec);
+                        if (chosenError == null)
+                        {
+                            return null;
+                        }
+
+                        var code = chosenError.Code;
+                        switch (code)
+                        {
+                            case 1065: // Unknown parameter
+                                return CreateError(this, ErrorClass.FailOther)
+                                    .Cause(new FeatureNotAvailableException("Unknown query parameter: note that query support in transactions is available from Couchbase Server 7.0 onwards"))
+                                    .Build();
+                            case 17004: // Transaction context error
+                                return new AttemptNotFoundOnQueryException();
+                            case 1080: // Timeout
+                            case 17010: // TransactionTimeout
+                                return CreateError(this, ErrorClass.FailExpiry)
+                                    .Cause(new AttemptExpiredException(this, "expired during query", err))
+                                    .RaiseException(TransactionOperationFailedException.FinalError.TransactionExpired)
+                                    .Build();
+                            case 17012: // Duplicate key
+                                return new DocumentExistsException(); // { Context = qec };
+                            case 17014: // Key not found
+                                return new DocumentNotFoundException(); // { Context = qec };
+                            case 17015: // CAS mismatch
+                                return new CasMismatchException(qec);
+                        }
+
+                        if (chosenError.AdditionalData != null && chosenError.AdditionalData.TryGetValue("cause", out var jtoken))
+                        {
+                            var cause = jtoken.ToObject<QueryErrorCause>();
+                            Logger.LogWarning("query code={code} cause={cause} raise={raise}",
+                                code,
+                                Redactor.UserData(cause.cause),
+                                cause.raise
+                                );
+
+                            var builder = CreateError(this, ErrorClass.FailOther, err);
+                            TransactionOperationFailedException.FinalError toRaise = cause.raise switch
+                            {
+                                "failed_post_commit" => TransactionOperationFailedException.FinalError.TransactionFailedPostCommit,
+                                "commit_ambiguous" => TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous,
+                                "expired" => TransactionOperationFailedException.FinalError.TransactionExpired,
+                                "failed" => TransactionOperationFailedException.FinalError.TransactionFailed,
+                                _ => TransactionOperationFailedException.FinalError.TransactionFailed
+                            };
+
+                            builder = builder.RaiseException(toRaise);
+
+                            if (cause.retry == true)
+                            {
+                                builder = builder.RetryTransaction();
+                            }
+
+                            if (cause.rollback == false)
+                            {
+                                builder.DoNotRollbackAttempt();
+                            }
+
+                            return builder.Build();
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private Query.Error? ChooseQueryError(QueryErrorContext qec)
+        {
+            // Look for a TransactionOperationFailed error from gocbcore
+            if (qec.Errors == null)
+            {
+                return null;
+            }
+
+            foreach (var err in qec.Errors)
+            {
+                if (err.Message.Contains("cause"))
+                {
+                    return err;
+                }
+            }
+
+            foreach (var err in qec.Errors)
+            {
+                if (err.Code >= 17_000 && err.Code < 18_000)
+                {
+                    return err;
+                }
+            }
+
+            return qec.Errors.First();
+        }
+
+        private async Task QueryBeginWork(IRequestSpan? parentSpan)
+        {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+            Logger.LogInformation("[{attemptId}] Entering query mode", AttemptId);
+
+            // TODO: create and populate txdata fully from existing KV ops
+            // TODO: state.timeLeftms
+            // TODO: config
+            // TODO: handle customMetadataCollection and uninitialized ATR (AtrRef with no Id)
+            var txid = new CompositeId()
+            {
+                Transactionid = _overallContext.TransactionId,
+                AttemptId = AttemptId
+            };
+
+            var state = new TxDataState((long)_overallContext.RemainingUntilExpiration.TotalMilliseconds);
+            var txConfig = new TxDataReportedConfig((long?)_config?.KeyValueTimeout?.TotalMilliseconds ?? 10_000, AtrIds.NumAtrs, _effectiveDurabilityLevel.ToString().ToUpperInvariant());
+
+            var mutations = _stagedMutations?.ToArray().Select(sm => sm.AsTxData()) ?? Array.Empty<TxDataMutation>();
+            var txdata = new QueryTxData(txid, state, txConfig, _atr?.AtrRef, mutations);
+            var queryOptions = NonStreamingQuery()
+                .ScanConsistency(QueryScanConsistency.RequestPlus) // TODO: From mergedConfig
+                .Raw("durability_level", _effectiveDurabilityLevel switch
+                {
+                    DurabilityLevel.None => "none",
+                    DurabilityLevel.Majority => "majority",
+                    DurabilityLevel.MajorityAndPersistToActive => "majorityAndPersistToActive",
+                    DurabilityLevel.PersistToMajority => "persistToMajority",
+                    _ => _effectiveDurabilityLevel.ToString()
+                })
+                .Raw("txtimeout", $"{_overallContext.RemainingUntilExpiration.TotalMilliseconds}ms")
+                // TODO: EXT_CUSTOM_METADATA
+                .Raw("numatrs", AtrIds.NumAtrs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var results = await QueryWrapper<QueryBeginWorkResponse>(
+                statementId: 0,
+                scope: null,
+                statement: "BEGIN WORK",
+                options: queryOptions,
+                hookPoint: ITestHooks.HOOK_QUERY_BEGIN_WORK,
+                isBeginWork: true,
+                existingErrorCheck: true,
+                txdata: txdata.ToJson(),
+                parentSpan: traceSpan.Item
+                ).CAF();
+
+            await foreach (var result in results)
+            {
+                if (result.txid != AttemptId)
+                {
+                    Logger.LogWarning("BEGIN WORK returned '{txid}', expected '{AttemptId}'", result.txid, AttemptId);
+                }
+                else
+                {
+                    Logger.LogDebug(result.ToString());
+                }
+            }
+        }
+
+        private string MakeKeyspace(ICouchbaseCollection collection) => $"default:`{collection.Scope.Bucket.Name}`.`{collection.Scope.Name}`.`{collection.Name}`";
 
         internal void SaveErrorWrapper(TransactionOperationFailedException ex)
         {

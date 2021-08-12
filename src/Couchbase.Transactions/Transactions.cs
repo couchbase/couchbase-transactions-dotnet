@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Couchbase.Core.Diagnostics.Tracing;
 using Couchbase.Core.Logging;
 using Couchbase.Core.Retry;
+using Couchbase.KeyValue;
 using Couchbase.Transactions.Cleanup;
 using Couchbase.Transactions.Cleanup.LostTransactions;
 using Couchbase.Transactions.Config;
@@ -215,6 +216,19 @@ namespace Couchbase.Transactions
             throw new InvalidOperationException("Loop should not have exited without expiration.");
         }
 
+        public async Task QueryAsync(string statement, TransactionQueryOptions? options = null, IScope? scope = null)
+        {
+            using var rootSpan = _requestTracer.RequestSpan(nameof(QueryAsync))
+                .SetAttribute("db.couchbase.transactions.tximplicit", true);
+
+            options ??= TransactionQueryOptions.QueryOptions();
+
+            _ = await RunAsync(async ctx =>
+            {
+                _ = await ctx.QueryAsync<object>(statement, options, scope, rootSpan).CAF();
+            }).CAF();
+        }
+
         private async Task ExecuteApplicationLambda(Func<AttemptContext, Task> transactionLogic, TransactionContext overallContext, ILoggerFactory loggerFactory, TransactionResult result, IRequestSpan parentSpan)
         {
             var attemptid = Guid.NewGuid().ToString();
@@ -229,6 +243,7 @@ namespace Couchbase.Transactions
                 TestHooks,
                 _redactor,
                 delegatingLoggerFactory,
+                _cluster,
                 DocumentRepository,
                 AtrRepository,
                 requestTracer: _requestTracer

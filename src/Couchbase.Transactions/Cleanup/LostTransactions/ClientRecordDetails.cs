@@ -48,6 +48,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                 {
                     var uuid = kvp.Key;
                     var client = kvp.Value;
+                    var parsedHlcNow = parsedHlc.NowTime;
 
                     // (Note, do not include this client as expired, as it is about to add itself)
                     if (uuid == clientUuid)
@@ -55,7 +56,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                         activeClientIds.Add(uuid);
                         thisClientAlreadyExists = true;
                     }
-                    else if (client.ParsedMutationCas == null || client.Expires < parsedHlc.NowTime)
+                    else if (client.ParsedMutationCas == null || client.Expires < parsedHlcNow)
                     {
                         expiredClientIds.Add(uuid);
                     }

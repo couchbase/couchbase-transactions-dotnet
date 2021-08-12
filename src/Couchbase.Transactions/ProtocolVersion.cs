@@ -16,6 +16,9 @@ namespace Couchbase.Transactions
             yield return new ExtensionName("ExtDeferredCommit", "EXT_DEFERRED_COMMIT", "DC");
             yield return new ExtensionName("ExtTransactionId", "EXT_TRANSACTION_ID", "TI");
             yield return new ExtensionName("ExtRemoveCompleted", "EXT_REMOVE_COMPLETED", "RC");
+
+            // TODO: Not yet ready for FIT testing
+            yield return new ExtensionName("ExtQuery", "EXT_QUERY", "QU");
         }
 
         internal static bool Supported(string shortCode) => SupportedShortCodes.Value.Contains(shortCode);

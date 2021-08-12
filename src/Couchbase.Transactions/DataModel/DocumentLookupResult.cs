@@ -48,23 +48,21 @@ namespace Couchbase.Transactions.DataModel
 
         internal ICouchbaseCollection DocumentCollection { get; }
 
-        public TransactionGetResult GetPreTransactionResult(TransactionJsonDocumentStatus docStatus) => TransactionGetResult.FromNonTransactionDoc(
+        public TransactionGetResult GetPreTransactionResult() => TransactionGetResult.FromNonTransactionDoc(
                 collection: DocumentCollection,
                 id: Id,
                 content: UnstagedContent ?? throw new ArgumentNullException(nameof(UnstagedContent)),
                 cas: Cas,
                 documentMetadata: DocumentMetadata,
                 isDeleted: IsDeleted,
-                transactionXattrs: TransactionXattrs,
-                docStatus: docStatus);
+                transactionXattrs: TransactionXattrs);
 
-        public TransactionGetResult GetPostTransactionResult(TransactionJsonDocumentStatus txnJsonStatus) => TransactionGetResult.FromStaged(
+        public TransactionGetResult GetPostTransactionResult() => TransactionGetResult.FromStaged(
                 DocumentCollection,
                 Id,
                 StagedContent,
                 Cas,
                 DocumentMetadata,
-                txnJsonStatus,
                 TransactionXattrs,
                 IsDeleted
             );

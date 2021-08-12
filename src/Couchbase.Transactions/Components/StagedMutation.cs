@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using Couchbase.Core;
 using Couchbase.KeyValue;
+using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Support;
 using Newtonsoft.Json.Linq;
 
@@ -35,6 +37,15 @@ namespace Couchbase.Transactions.Components
             scp: Doc.Collection.Scope.Name,
             col: Doc.Collection.Name,
             id: Doc.Id);
+
+        public TxDataMutation AsTxData() => new TxDataMutation(
+            scp: Doc.Collection.Scope.Name,
+            coll: Doc.Collection.Name,
+            bkt: Doc.Collection.Scope.Bucket.Name,
+            id: Doc.Id,
+            cas: Doc.Cas.ToString(CultureInfo.InvariantCulture),
+            type: Type.ToString().ToUpperInvariant()
+            );
     }
 
     internal enum StagedMutationType

@@ -38,7 +38,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         {
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
-            var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
+            var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability, _outputHelper);
 
             int attempts = 0;
             txn.TestHooks = new DelegateTestHooks()
@@ -88,7 +88,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
              */
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
-            await using var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
+            await using var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability, _outputHelper);
             txn.TestHooks = new DelegateTestHooks()
             {
                 BeforeAtrCommitImpl = (ctx) => throw ErrorClass.FailHard.Throwable()
@@ -137,7 +137,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             */
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
-            await using var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
+            await using var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability, _outputHelper);
             txn.TestHooks = new DelegateTestHooks()
             {
                 BeforeAtrCommitImpl = (ctx) => throw ErrorClass.FailHard.Throwable()
@@ -180,7 +180,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
              */
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId + "_testDurability", sampleDoc);
-            await using var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
+            await using var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability, _outputHelper);
             txn.TestHooks = new DelegateTestHooks()
             {
                 BeforeAtrCommitImpl = (ctx) => throw ErrorClass.FailHard.Throwable()

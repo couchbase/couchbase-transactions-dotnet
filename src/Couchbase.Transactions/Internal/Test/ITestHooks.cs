@@ -36,6 +36,15 @@ namespace Couchbase.Transactions.Internal.Test
         public const string HOOK_ATR_PENDING = "atrPending";
         public const string HOOK_ATR_COMPLETE = "atrComplete";
         public const string HOOK_CHECK_WRITE_WRITE_CONFLICT = "checkATREntryForBlockingDoc";
+        public const string HOOK_BEFORE_QUERY = "beforeQuery";
+        public const string HOOK_AFTER_QUERY = "afterQuery";
+        public const string HOOK_QUERY_BEGIN_WORK = "queryBeginWork";
+        public const string HOOK_QUERY_COMMIT = "queryCommit";
+        public const string HOOK_QUERY_KV_GET = "queryKvGet";
+        public const string HOOK_QUERY_KV_REPLACE = "queryKvReplace";
+        public const string HOOK_QUERY_KV_REMOVE = "queryKvRemove";
+        public const string HOOK_QUERY_KV_INSERT = "querykvInsert";
+        public const string HOOK_QUERY_ROLLBACK = "queryRollback";
 
         Task<int?> BeforeAtrCommit(AttemptContext self) => Task.FromResult<int?>(0);
 
@@ -109,6 +118,9 @@ namespace Couchbase.Transactions.Internal.Test
         Task<int?> BeforeAtrCommitAmbiguityResolution(AttemptContext attemptContext) => Task.FromResult<int?>(0);
 
         Task<string?> AtrIdForVBucket(AttemptContext self, int vbucketId) => Task.FromResult<string?>(null);
+
+        Task<int?> BeforeQuery(AttemptContext self, string statement) => Task.FromResult<int?>(0);
+        Task<int?> AfterQuery(AttemptContext self, string statement) => Task.FromResult<int?>(0);
     }
 
     /// <summary>

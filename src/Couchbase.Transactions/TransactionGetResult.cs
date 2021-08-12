@@ -8,6 +8,7 @@ using Couchbase.KeyValue;
 using Couchbase.Transactions.Components;
 using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Internal;
+using Newtonsoft.Json.Linq;
 
 namespace Couchbase.Transactions
 {
@@ -23,7 +24,6 @@ namespace Couchbase.Transactions
             ulong cas,
             ICouchbaseCollection collection,
             TransactionXattrs? transactionXattrs,
-            TransactionJsonDocumentStatus status,
             DocumentMetadata? documentMetadata,
             bool isTombstone)
         {
@@ -33,14 +33,12 @@ namespace Couchbase.Transactions
             Cas = cas;
             Collection = collection;
             TransactionXattrs = transactionXattrs;
-            Status = status;
             DocumentMetadata = documentMetadata;
             IsDeleted = isTombstone;
         }
 
         internal bool IsDeleted { get; }
 
-        internal TransactionJsonDocumentStatus Status { get; }
         internal TransactionXattrs? TransactionXattrs { get; }
 
         public string Id { get; }
@@ -48,6 +46,8 @@ namespace Couchbase.Transactions
         public ulong Cas { get; internal set; }
         public DocumentMetadata? DocumentMetadata { get; }
         public ICouchbaseCollection Collection { get; }
+
+        internal JObject? TxnMeta { get; set; } = null;
 
         public T ContentAs<T>() => _content.ContentAs<T>();
 
@@ -89,7 +89,6 @@ namespace Couchbase.Transactions
                 updatedCas,
                 collection,
                 txn,
-                TransactionJsonDocumentStatus.Normal,
                 null,
                 isDeleted
             );
@@ -97,8 +96,7 @@ namespace Couchbase.Transactions
 
         internal static TransactionGetResult FromOther(
             TransactionGetResult doc,
-            IContentAsWrapper content,
-            TransactionJsonDocumentStatus status)
+            IContentAsWrapper content)
         {
             // TODO: replacement for Links
 
@@ -108,13 +106,12 @@ namespace Couchbase.Transactions
                 doc.Cas,
                 doc.Collection,
                 doc.TransactionXattrs,
-                status,
                 doc.DocumentMetadata,
                 doc.IsDeleted
                 );
         }
 
-        internal static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection collection, string id, IContentAsWrapper content, ulong cas, DocumentMetadata documentMetadata, bool isDeleted, TransactionXattrs? transactionXattrs, TransactionJsonDocumentStatus docStatus)
+        internal static TransactionGetResult FromNonTransactionDoc(ICouchbaseCollection collection, string id, IContentAsWrapper content, ulong cas, DocumentMetadata documentMetadata, bool isDeleted, TransactionXattrs? transactionXattrs)
         {
             return new TransactionGetResult(
                 id: id,
@@ -122,13 +119,12 @@ namespace Couchbase.Transactions
                 cas: cas,
                 collection: collection,
                 transactionXattrs: transactionXattrs,
-                status: docStatus,
                 documentMetadata: documentMetadata,
                 isTombstone: isDeleted
             );
         }
 
-        internal static TransactionGetResult FromStaged(ICouchbaseCollection collection, string id, IContentAsWrapper? stagedContent, ulong cas, DocumentMetadata documentMetadata, TransactionJsonDocumentStatus status, TransactionXattrs? txn, bool isTombstone)
+        internal static TransactionGetResult FromStaged(ICouchbaseCollection collection, string id, IContentAsWrapper? stagedContent, ulong cas, DocumentMetadata documentMetadata, TransactionXattrs? txn, bool isTombstone)
         {
             return new TransactionGetResult(
                 id,
@@ -136,10 +132,36 @@ namespace Couchbase.Transactions
                 cas,
                 collection,
                 txn,
-                status,
                 documentMetadata,
                 isTombstone
                 );
+        }
+
+        internal static TransactionGetResult FromQueryGet(ICouchbaseCollection collection, string id, QueryGetResult queryResult)
+        {
+            return new TransactionGetResult(
+                id,
+                new JObjectContentWrapper(queryResult.doc),
+                ulong.Parse(queryResult.scas),
+                collection,
+                null,
+                documentMetadata: null,
+                isTombstone: false)
+            {
+                TxnMeta = queryResult.txnMeta
+            };
+        }
+
+        internal static TransactionGetResult FromQueryInsert(ICouchbaseCollection collection, string id, object originalDoc, QueryInsertResult queryResult)
+        {
+            return new TransactionGetResult(
+                id,
+                new JObjectContentWrapper(originalDoc),
+                ulong.Parse(queryResult.scas),
+                collection,
+                null,
+                documentMetadata: null,
+                isTombstone: false);
         }
     }
 }

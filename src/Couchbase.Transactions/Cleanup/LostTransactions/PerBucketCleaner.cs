@@ -179,7 +179,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                     }
 
                     clientRecordDetails = new ClientRecordDetails(clientRecord, parsedHlc, ClientUuid, _cleanupWindow);
-                    _logger.LogDebug("Found client record for '{bkt}':\n{clientRecordDetails}", FullBucketName, clientRecordDetails);
+                    _logger.LogDebug("Found client record for '{bkt}':\n{clientRecordDetails}\n{clientRecord}", FullBucketName, clientRecordDetails, Newtonsoft.Json.Linq.JObject.FromObject(clientRecord).ToString());
                     break;
                 }
                 catch (Exception ex)

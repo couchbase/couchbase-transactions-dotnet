@@ -7,6 +7,7 @@ using Newtonsoft.Json.Linq;
 
 namespace Couchbase.Transactions.DataModel
 {
+    // TODO:  Everything in DataModel should probably be an internal record
     public class TransactionXattrs
     {
         [JsonProperty("id")]

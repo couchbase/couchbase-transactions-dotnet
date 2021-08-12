@@ -202,7 +202,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             try
             {
                 var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
-                var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability);
+                var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability, _outputHelper);
 
                 var result = await txn.RunAsync(async ctx =>
                 {

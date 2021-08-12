@@ -138,6 +138,13 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                     _logger.LogInformation("Cluster ready.  Retrying GetAllBuckets...");
                     buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
                 }
+                catch (NullReferenceException)
+                {
+                    _logger.LogWarning("GetAllBuckets failed due to NullReferenceException.  Cluster not ready?");
+                    await _cluster.WaitUntilReadyAsync(TimeSpan.FromSeconds(30)).CAF();
+                    _logger.LogInformation("Cluster ready.  Retrying GetAllBuckets...");
+                    buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
+                }
 
                 foreach (var bkt in buckets)
                 {

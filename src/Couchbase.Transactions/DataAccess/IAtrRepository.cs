@@ -22,6 +22,14 @@ namespace Couchbase.Transactions.DataAccess
 
         string FullPath => $"{BucketName}.{ScopeName}.{CollectionName}::{AtrId}";
 
+        AtrRef AtrRef => new AtrRef()
+        {
+            BucketName = BucketName,
+            ScopeName = ScopeName,
+            CollectionName = CollectionName,
+            Id = AtrId
+        };
+
         ICouchbaseCollection Collection { get; }
 
         Task<ICouchbaseCollection?> GetAtrCollection(AtrRef atrRef);

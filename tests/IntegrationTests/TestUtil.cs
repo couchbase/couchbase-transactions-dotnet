@@ -31,18 +31,21 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             return durability;
         }
 
-        public static async Task<(ICouchbaseCollection collection, string docId, object sampleDoc)> PrepSampleDoc(ClusterFixture fixture, ITestOutputHelper outputHelper, [CallerMemberName]string testName = nameof(PrepSampleDoc))
+        public record SampleDoc(string id, string? type, string? foo, long? revision);
+
+        public static async Task<(ICouchbaseCollection collection, string docId, SampleDoc sampleDoc)> PrepSampleDoc(ClusterFixture fixture, ITestOutputHelper outputHelper, [CallerMemberName]string testName = nameof(PrepSampleDoc))
         {
             var defaultCollection = await fixture.OpenDefaultCollection(outputHelper);
             var docId = Guid.NewGuid().ToString();
-            var sampleDoc = new { type = nameof(testName), foo = "bar", revision = 100 };
+            var sampleDoc = new SampleDoc(docId, testName, "bar", 100);
             return (defaultCollection, docId, sampleDoc);
         }
 
-        public static Transactions CreateTransaction(ICluster cluster, DurabilityLevel durability)
+        public static Transactions CreateTransaction(ICluster cluster, DurabilityLevel durability, ITestOutputHelper outputHelper)
         {
-            var configBuilder = TransactionConfigBuilder.Create();
-            configBuilder.DurabilityLevel(durability);
+            var configBuilder = TransactionConfigBuilder.Create()
+                .DurabilityLevel(durability)
+                .LoggerFactory(new ClusterFixture.TestOutputLoggerFactory(outputHelper));
             if (Debugger.IsAttached)
             {
                 // don't expire when watching the debugger.
