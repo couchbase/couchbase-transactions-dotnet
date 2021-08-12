@@ -155,6 +155,7 @@ namespace Couchbase.Transactions.DataAccess
                 MutateInSpec.Insert(_prefixedAtrFieldStartTimestamp, MutationMacro.Cas),
                 MutateInSpec.Insert(_prefixedAtrFieldExpiresAfterMsecs, exp,
                             createPath: false, isXattr: true),
+                MutateInSpec.SetDoc(new byte?[] { null }), // ExtBinaryMetadata
             };
 
             var mutateResult = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Upsert)).CAF();

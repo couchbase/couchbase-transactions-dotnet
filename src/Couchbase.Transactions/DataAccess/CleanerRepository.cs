@@ -39,8 +39,7 @@ namespace Couchbase.Transactions.DataAccess
             var specs = new MutateInSpec[]
             {
                 MutateInSpec.Insert(ClientRecordsIndex.FIELD_CLIENTS_FULL, PlaceholderEmptyJObject, isXattr: true),
-                // TODO: ExtBinaryMetadata
-                // Replace “” (the document body), with a byte array of length 1, containing a single null byte. With SDK3 a MutateInSpec.Replace results in a SET (0x1) spec being sent.
+                MutateInSpec.SetDoc(new byte?[] { null }), // ExtBinaryMetadata
             };
 
             _ = await Collection.MutateInAsync(ClientRecordsIndex.CLIENT_RECORD_DOC_ID, specs, opts).CAF();
@@ -95,9 +94,8 @@ namespace Couchbase.Transactions.DataAccess
             {
                 MutateInSpec.Upsert(ClientRecordEntry.PathForHeartbeat(clientUuid), MutationMacro.Cas, createPath: true),
                 MutateInSpec.Upsert(ClientRecordEntry.PathForExpires(clientUuid), (int)cleanupWindow.TotalMilliseconds + ExpiresSafetyMarginMillis, isXattr: true),
-                MutateInSpec.Upsert(ClientRecordEntry.PathForNumAtrs(clientUuid), numAtrs, isXattr: true)
-
-                // TODO: ExtBinaryMetadata
+                MutateInSpec.Upsert(ClientRecordEntry.PathForNumAtrs(clientUuid), numAtrs, isXattr: true),
+                MutateInSpec.SetDoc(new byte?[] { null }), // ExtBinaryMetadata
             };
 
             var remainingSpecLimit = 16 - specs.Count;

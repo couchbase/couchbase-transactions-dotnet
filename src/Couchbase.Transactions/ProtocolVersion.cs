@@ -13,12 +13,12 @@ namespace Couchbase.Transactions
         {
             // these will be the stringified version of the enum generated off of the GRPC proto files.
             // For example, EXT_DEFERRED_COMMIT becomes ExtDeferredCommit
-            yield return new ExtensionName("ExtDeferredCommit", "EXT_DEFERRED_COMMIT", "DC");
             yield return new ExtensionName("ExtTransactionId", "EXT_TRANSACTION_ID", "TI");
             yield return new ExtensionName("ExtRemoveCompleted", "EXT_REMOVE_COMPLETED", "RC");
 
             // TODO: Not yet ready for FIT testing
-            yield return new ExtensionName("ExtQuery", "EXT_QUERY", "QU");
+            ////yield return new ExtensionName("ExtQuery", "EXT_QUERY", "QU");
+            yield return new ExtensionName("ExtBinaryMetadata", "EXT_BINARY_METADATA", "BM");
         }
 
         internal static bool Supported(string shortCode) => SupportedShortCodes.Value.Contains(shortCode);
