@@ -93,9 +93,9 @@ namespace Couchbase.Transactions.DataAccess
             }
         }
 
-        public async Task UnstageRemove(ICouchbaseCollection collection, string docId)
+        public async Task UnstageRemove(ICouchbaseCollection collection, string docId, ulong cas = 0)
         {
-            var opts = new RemoveOptions().Defaults(_durability, _keyValueTimeout).Cas(0);
+            var opts = new RemoveOptions().Defaults(_durability, _keyValueTimeout).Cas(cas);
             await collection.RemoveAsync(docId, opts).CAF();
         }
 

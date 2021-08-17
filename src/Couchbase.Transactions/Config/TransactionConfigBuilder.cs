@@ -108,6 +108,18 @@ namespace Couchbase.Transactions.Config
             _config.LoggerFactory = loggerFactory;
             return this;
         }
+
+        /// <summary>
+        /// Set <see cref="ICouchbaseCollection"/> to use for Active Transaction Record metadata.
+        /// </summary>
+        /// <param name="metadataCollection">The collection to use.</param>
+        /// <returns>The builder.</returns>
+        /// <remarks>If this is not set, then the metadata collection will be chosen based on the VBucket of the first document modification in the transaction.</remarks>
+        public TransactionConfigBuilder MetadataCollection(ICouchbaseCollection metadataCollection)
+        {
+            _config.MetadataCollection = metadataCollection;
+            return this;
+        }
     }
 }
 

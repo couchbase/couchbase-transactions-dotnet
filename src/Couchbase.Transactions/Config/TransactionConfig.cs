@@ -83,6 +83,11 @@ namespace Couchbase.Transactions.Config
         /// </summary>
         public ILoggerFactory? LoggerFactory { get; internal set; }
 
+        /// <summary>
+        /// Gets the <see cref="ICouchbaseCollection"/> to use for Active Transaction Record metadata.
+        /// </summary>
+        public ICouchbaseCollection? MetadataCollection { get; internal set; }
+
         internal TransactionConfig(
             DurabilityLevel durabilityLevel = DefaultDurabilityLevel,
             TimeSpan? expirationTime = null,

@@ -19,6 +19,8 @@ namespace Couchbase.Transactions
             // TODO: Not yet ready for FIT testing
             ////yield return new ExtensionName("ExtQuery", "EXT_QUERY", "QU");
             yield return new ExtensionName("ExtBinaryMetadata", "EXT_BINARY_METADATA", "BM");
+            yield return new ExtensionName("ExtCustomMetadataCollection", "EXT_CUSTOM_METADATA_COLLECTION", "CM");
+            yield return new ExtensionName("BfCbd3787", "BF_CBD_3787", "BF3787");
         }
 
         internal static bool Supported(string shortCode) => SupportedShortCodes.Value.Contains(shortCode);

@@ -15,7 +15,7 @@ namespace Couchbase.Transactions.DataAccess
         Task<(ulong updatedCas, MutationToken mutationToken)> MutateStagedRemove(TransactionGetResult doc, IAtrRepository atr);
 
         Task<(ulong updatedCas, MutationToken? mutationToken)> UnstageInsertOrReplace(ICouchbaseCollection collection, string docId, ulong cas, object finalDoc, bool insertMode);
-        Task UnstageRemove(ICouchbaseCollection collection, string docId);
+        Task UnstageRemove(ICouchbaseCollection collection, string docId, ulong cas = 0);
 
         Task ClearTransactionMetadata(ICouchbaseCollection collection, string docId, ulong cas, bool isDeleted);
 

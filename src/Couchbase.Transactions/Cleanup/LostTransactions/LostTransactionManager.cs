@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Couchbase.Core.Compatibility;
+using Couchbase.KeyValue;
 using Couchbase.Transactions.DataAccess;
 using Couchbase.Transactions.Internal.Test;
 using Microsoft.Extensions.Logging;
@@ -37,7 +38,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
         public int RunningCount => _discoveredBuckets.Where(pbc => pbc.Value.Running).Count();
         public long TotalRunCount => _discoveredBuckets.Sum(pbc => pbc.Value.RunCount);
 
-        internal LostTransactionManager(ICluster cluster, ILoggerFactory loggerFactory, TimeSpan cleanupWindow, TimeSpan? keyValueTimeout, string? clientUuid = null, bool startDisabled = false)
+        internal LostTransactionManager(ICluster cluster, ILoggerFactory loggerFactory, TimeSpan cleanupWindow, TimeSpan? keyValueTimeout, string? clientUuid = null, bool startDisabled = false, ICouchbaseCollection metadataCollection = null)
         {
             ClientUuid = clientUuid ?? Guid.NewGuid().ToString();
             _logger = loggerFactory.CreateLogger<LostTransactionManager>();
@@ -45,7 +46,19 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
             _cluster = cluster;
             _cleanupWindow = cleanupWindow;
             _keyValueTimeout = keyValueTimeout;
-            _discoverBucketsTimer = new Timer(TimerCallback, null, startDisabled ? -1 : 0, DiscoverBucketsPeriodMs);
+
+            if (metadataCollection == null)
+            {
+                // discover all buckets periodically and make sure there is a 1:1 relationship between cleaners and buckets
+                _discoverBucketsTimer = new Timer(DiscoverAndCleanAllBucketsCallback, null, startDisabled ? -1 : 0, DiscoverBucketsPeriodMs);
+            }
+            else
+            {
+                // cleanup only the specifified collection.
+                var singleBucketCleaner = CleanerForCollection(metadataCollection, startDisabled);
+                _discoveredBuckets.TryAdd(metadataCollection.Scope.Bucket.Name, singleBucketCleaner);
+                _discoverBucketsTimer = new Timer(PlaceholderDoNothingCallback, null, -1, DiscoverBucketsPeriodMs);
+            }
         }
 
         public void Start()
@@ -94,7 +107,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
             }
         }
 
-        private async void TimerCallback(object? state)
+        private async void DiscoverAndCleanAllBucketsCallback(object? state)
         {
             try
             {
@@ -105,6 +118,9 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                 _logger.LogWarning("Bucket discovery failed: {ex}", ex);
             }
         }
+
+        private void PlaceholderDoNothingCallback(object? state)
+        { }
 
         public async Task DiscoverBuckets(bool startDisabled, Func<ICleanupTestHooks>? setupTestHooks = null)
         {
@@ -176,13 +192,16 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
 
         private async Task<PerBucketCleaner> CleanerForBucket(string bucketName, bool startDisabled)
         {
-            // TODO: Support ExtCustomMetadataCollection
-            _logger.LogDebug("New cleaner for bucket {bkt}", bucketName);
             var bucket = await _cluster.BucketAsync(bucketName).CAF();
             var collection = bucket.DefaultCollection();
+            return CleanerForCollection(collection, startDisabled);
+        }
+
+        private PerBucketCleaner CleanerForCollection(ICouchbaseCollection collection, bool startDisabled)
+        {
+            _logger.LogDebug("New cleaner for {collection}", AttemptContext.MakeKeyspace(collection));
             var repository = new CleanerRepository(collection, _keyValueTimeout);
             var cleaner = new Cleaner(_cluster, _keyValueTimeout, _loggerFactory, creatorName: nameof(LostTransactionManager));
-
             return new PerBucketCleaner(ClientUuid, cleaner, repository, _cleanupWindow, _loggerFactory, startDisabled) { TestHooks = TestHooks };
         }
     }

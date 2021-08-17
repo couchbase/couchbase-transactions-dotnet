@@ -149,6 +149,63 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         }
 
         [Fact]
+        public async Task Basic_Insert_Should_Succeed_CustomMetadataCollection()
+        {
+            // Use a feature from an unreleased CouchbaseNetClient to guarantee we're using latest from master instead.
+            var ex = new Core.Exceptions.CasMismatchException();
+
+            var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);
+            var customCollection = await _fixture.OpenCustomCollection(_outputHelper);
+            var sampleDoc = new { type = nameof(Basic_Insert_Should_Succeed), foo = "bar", revision = 100 };
+            var docId = nameof(Basic_Insert_Should_Succeed) + Guid.NewGuid().ToString();
+            try
+            {
+                var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId + "_testDurability", sampleDoc);
+
+                var configBuilder = TransactionConfigBuilder.Create();
+                configBuilder.DurabilityLevel(durability);
+                configBuilder.MetadataCollection(customCollection);
+                var txn = Transactions.Create(_fixture.Cluster, configBuilder.Build());
+
+                var result = await txn.RunAsync(async ctx =>
+                {
+                    var insertResult = await ctx.InsertAsync(defaultCollection, docId, sampleDoc).ConfigureAwait(false);
+                    Assert.Equal(ClusterFixture.CustomCollectionName, insertResult?.TransactionXattrs?.AtrRef?.CollectionName);
+
+                    var getResult = await ctx.GetAsync(defaultCollection, docId);
+                    Assert.NotNull(getResult);
+                    var asJobj = getResult!.ContentAs<JObject>();
+                    Assert.Equal("bar", asJobj["foo"].Value<string>());
+                    Assert.Equal(ClusterFixture.CustomCollectionName, getResult?.TransactionXattrs?.AtrRef?.CollectionName);
+                });
+
+                var postTxnGetResult = await defaultCollection.GetAsync(docId);
+                var postTxnDoc = postTxnGetResult.ContentAs<dynamic>();
+                Assert.Equal("100", postTxnDoc.revision.ToString());
+
+                var postTxnLookupInResult =
+                    await defaultCollection.LookupInAsync(docId, spec => spec.Get("txn", isXattr: true));
+                Assert.False(postTxnLookupInResult.Exists(0));
+            }
+            catch
+            {
+                throw;
+            }
+            finally
+            {
+                try
+                {
+                    await defaultCollection.RemoveAsync(docId);
+                }
+                catch (Exception e)
+                {
+                    _outputHelper.WriteLine($"Error during cleanup: {e.ToString()}");
+                }
+            }
+        }
+
+
+        [Fact]
         public async Task Basic_Replace_Should_Succeed()
         {
             var defaultCollection = await _fixture.OpenDefaultCollection(_outputHelper);

@@ -83,7 +83,7 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
             return ((ulong)_rollingCas, new MutationToken("fake", 1, 2, _rollingCas));
         }
 
-        public async Task UnstageRemove(ICouchbaseCollection collection, string docId) => _ = await LookupDocumentAsync(collection, docId);
+        public async Task UnstageRemove(ICouchbaseCollection collection, string docId, ulong cas = 0) => _ = await LookupDocumentAsync(collection, docId);
     }
 }
 /* ************************************************************

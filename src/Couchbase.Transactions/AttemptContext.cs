@@ -648,6 +648,7 @@ namespace Couchbase.Transactions
                                 return (RepeatAction.RepeatWithDelay, null);
                             case ErrorClass.FailCasMismatch:
                             case ErrorClass.FailDocAlreadyExists:
+                                TransactionGetResult? docAlreadyExistsResult = null;
                                 var repeatAction = await RepeatUntilSuccessOrThrow<RepeatAction>(async () =>
                                 {
                                     try
@@ -683,9 +684,44 @@ namespace Couchbase.Transactions
                                         }
                                         else
                                         {
+                                            // TODO: BF-CBD-3787
+                                            var operationType = docWithMeta?.TransactionXattrs?.Operation?.Type;
+                                            if (operationType != "insert")
+                                            {
+                                                Logger.LogWarning("BF-CBD-3787 FAIL_DOC_ALREADY_EXISTS here because type = {operationType}", operationType);
+                                                throw CreateError(this, ErrorClass.FailDocAlreadyExists, new DocumentExistsException()).Build();
+                                            }
+
                                             // Else call the CheckWriteWriteConflict logic, which conveniently does everything we need to handle the above cases.
                                             var getResult = docWithMeta!.GetPostTransactionResult();
                                             await CheckWriteWriteConflict(getResult, ForwardCompatibility.WriteWriteConflictInserting, traceSpan.Item).CAF();
+
+                                            // BF-CBD-3787: If the document is a staged insert but also is not a tombstone (e.g. it is from protocol 1.0), it must be deleted first
+                                            if (operationType == "insert" && !isTombstone)
+                                            {
+                                                try
+                                                {
+                                                    await _testHooks.BeforeOverwritingStagedInsertRemoval(this, id).CAF();
+                                                    await _docs.UnstageRemove(collection, id, getResult.Cas).CAF();
+                                                }
+                                                catch (Exception err)
+                                                {
+                                                    var ec = err.Classify();
+                                                    switch (ec)
+                                                    {
+                                                        case ErrorClass.FailDocNotFound:
+                                                        case ErrorClass.FailCasMismatch:
+                                                            throw CreateError(this, ec, err).RetryTransaction().Build();
+                                                        default:
+                                                            throw CreateError(this, ec, err).Build();
+                                                    }
+                                                }
+
+                                                // hack workaround for NCBC-2944
+                                                // Supposed to "retry this (CreateStagedInsert) algorithm with the cas from the Remove", but we don't have a Cas from the Remove.
+                                                // Instead, we just trigger a retry of the entire transaction, since this is such an edge case.
+                                                throw CreateError(this, ErrorClass.FailDocAlreadyExists, ex).RetryTransaction().Build();
+                                            }
 
                                             // If this logic succeeds, we are ok to overwrite the doc.
                                             // Perform this algorithm (createStagedInsert) from the top, with cas=the cas from the get.
@@ -700,7 +736,7 @@ namespace Couchbase.Transactions
                                     }
                                 }).CAF();
 
-                                return (repeatAction, null);
+                                return (repeatAction, docAlreadyExistsResult);
                         }
 
                         throw _triage.AssertNotNull(triaged, ex);
@@ -1583,7 +1619,7 @@ namespace Couchbase.Transactions
         protected async Task InitAtrIfNeeded(ICouchbaseCollection collection, string id, IRequestSpan? parentSpan)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
-            var atrCollection = collection.Scope.Bucket.DefaultCollection();
+            var atrCollection = _overallContext.Config.MetadataCollection ?? collection.Scope.Bucket.DefaultCollection();
             var testHookAtrId = await _testHooks.AtrIdForVBucket(this, AtrIds.GetVBucketId(id));
             var atrId = AtrIds.GetAtrId(id);
             lock (_initAtrLock)
@@ -1750,8 +1786,13 @@ namespace Couchbase.Transactions
 
                 if (sw.Elapsed > WriteWriteConflictTimeLimit)
                 {
-                    Logger.LogWarning("{method} CONFLICT DETECTED. Other ATR is {otherAtrState} for {redactedId}, attempt={attemptId}",
-                        method, otherAtr.State, redactedId, AttemptId);
+                    Logger.LogWarning("{method} CONFLICT DETECTED. Other ATR TransactionId={otherAtrTransactionid} is {otherAtrState} for document {redactedId}, thisAttempt={transactionId}/{attemptId}",
+                        method,
+                        otherAtr.TransactionId,
+                        otherAtr.State,
+                        redactedId,
+                        _overallContext.TransactionId,
+                        AttemptId);
                     throw CreateError(this, ErrorClass.FailWriteWriteConflict)
                         .RetryTransaction()
                         .Build();
@@ -2033,7 +2074,7 @@ namespace Couchbase.Transactions
             }
         }
 
-        private string MakeKeyspace(ICouchbaseCollection collection) => $"default:`{collection.Scope.Bucket.Name}`.`{collection.Scope.Name}`.`{collection.Name}`";
+        internal static string MakeKeyspace(ICouchbaseCollection collection) => $"default:`{collection.Scope.Bucket.Name}`.`{collection.Scope.Name}`.`{collection.Name}`";
 
         internal void SaveErrorWrapper(TransactionOperationFailedException ex)
         {
