@@ -140,7 +140,7 @@ namespace Couchbase.Transactions.DataAccess
             };
 
             _ = await Collection.MutateInAsync(AtrId, specs, GetMutateOpts(StoreSemantics.Replace)).CAF();
-            _logger.LogInformation("Removed ATR {atr}/{atrRoot}", AtrId, _atrRoot);
+            _logger.LogInformation("Removed ATR {atr}/{atrRoot} on {atrCollection} ", AtrId, _atrRoot, Collection.MakeKeyspace());
         }
 
         public async Task MutateAtrPending(ulong exp)

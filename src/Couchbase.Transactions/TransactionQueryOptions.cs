@@ -8,47 +8,205 @@ using Couchbase.Query;
 namespace Couchbase.Transactions
 {
     /// <summary>
-    /// A limited subset of <see cref="QueryOptions"/> that are usable in Transactions.
+    /// A limited subset of <see cref="Create"/> that are usable in Transactions.
     /// </summary>
     public class TransactionQueryOptions
     {
-        internal QueryOptions Builder { get; } = new QueryOptions().Metrics(true);
+        // if you add anything to this section, add a corresponding 'if' block to the Build() method.
+        private Dictionary<string, object> _parameters = new();
+        private List<object> _arguments = new();
+        private Dictionary<string, object> _rawParameters = new();
+        private QueryScanConsistency? _scanConsistency = null;
+        private bool? _flexIndex = null;
+        private string? _clientContextId = null;
+        private TimeSpan? _scanWait = null;
+        private int? _scanCap = null;
+        private int? _pipelineBatch = null;
+        private int? _pipelineCap = null;
+        private bool? _readonly = null;
+        private bool? _adhoc = null;
+        private TimeSpan? _timeout = null;
+        private ITypeSerializer _serializer;
 
         private TransactionQueryOptions()
         {
         }
 
-        public static TransactionQueryOptions QueryOptions() => new TransactionQueryOptions();
+        public static TransactionQueryOptions Create() => new TransactionQueryOptions();
 
-        public TransactionQueryOptions Parameter(string key, object val) => Wrap(() => Builder.Parameter(key, val));
-        public TransactionQueryOptions Parameter(object paramValue) => Wrap(() => Builder.Parameter(paramValue));
-        public TransactionQueryOptions Parameter(params object[] values) => Wrap(() => Builder.Parameter(values));
-        public TransactionQueryOptions ScanConsistency(QueryScanConsistency scanConsistency) => Wrap(() => Builder.ScanConsistency(scanConsistency));
-        public TransactionQueryOptions FlexIndex(bool flexIndex) => Wrap(() => Builder.FlexIndex(flexIndex));
-
-        public TransactionQueryOptions Serializer(ITypeSerializer serializer)
+        internal QueryOptions Build()
         {
-            Builder.Serializer = serializer;
+            QueryOptions opts = new();
+            foreach (var kvp in _parameters)
+            {
+                opts.Parameter(kvp.Key, kvp.Value);
+            }
+
+            foreach (var arg in _arguments)
+            {
+                opts.Parameter(arg);
+            }
+
+            foreach (var raw in _rawParameters)
+            {
+                opts.Raw(raw.Key, raw.Value);
+            }
+
+            if (_scanConsistency != null)
+            {
+                opts.ScanConsistency(_scanConsistency.Value);
+            }
+
+            if (_flexIndex != null)
+            {
+                opts.FlexIndex(_flexIndex.Value);
+            }
+
+            if (_clientContextId != null)
+            {
+                opts.ClientContextId(_clientContextId);
+            }
+
+            if (_scanWait != null)
+            {
+                opts.ScanWait(_scanWait.Value);
+            }
+
+            if (_scanCap != null)
+            {
+                opts.ScanCap(_scanCap.Value);
+            }
+
+            if (_pipelineBatch != null)
+            {
+                opts.PipelineBatch(_pipelineBatch.Value);
+            }
+
+            if (_pipelineCap != null)
+            {
+                opts.PipelineCap(_pipelineCap.Value);
+            }
+
+            if (_readonly != null)
+            {
+                opts.Readonly(_readonly.Value);
+            }
+
+            if (_adhoc != null)
+            {
+                opts.AdHoc(_adhoc.Value);
+            }
+
+            if (_timeout != null)
+            {
+                opts.Timeout(_timeout.Value);
+            }
+
+            if (_serializer != null)
+            {
+                opts.Serializer = _serializer;
+            }
+
+            return opts;
+        }
+
+        public TransactionQueryOptions Parameter(string key, object val)
+        {
+            _parameters.Add(key, val);
             return this;
         }
 
-        public TransactionQueryOptions ClientContextId(string clientContextId) => Wrap(() => Builder.ClientContextId(clientContextId));
-        public TransactionQueryOptions ScanWait(TimeSpan scanWait) => Wrap(() => Builder.ScanWait(scanWait));
-        public TransactionQueryOptions ScanCap(int capacity) => Wrap(() => Builder.ScanCap(capacity));
-        public TransactionQueryOptions PipelineBatch(int batchSize) => Wrap(() => Builder.PipelineBatch(batchSize));
-        public TransactionQueryOptions PipelineCap(int capacity) => Wrap(() => Builder.PipelineCap(capacity));
-        public TransactionQueryOptions Readonly(bool readOnly) => Wrap(() => Builder.Readonly(readOnly));
-        public TransactionQueryOptions AdHoc(bool adhoc) => Wrap(() => Builder.AdHoc(adhoc));
-        public TransactionQueryOptions Raw(string key, object val) => Wrap(() => Builder.Raw(key, val));
-
-
-
-
-        public TransactionQueryOptions Timeout(TimeSpan timeout) => Wrap(() => Builder.Timeout(timeout));
-
-        private TransactionQueryOptions Wrap(Func<QueryOptions> wrap)
+        public TransactionQueryOptions Parameter(object paramValue)
         {
-            wrap();
+            _arguments.Add(paramValue);
+            return this;
+        }
+
+        public TransactionQueryOptions Parameter(params object[] values)
+        {
+            _arguments.AddRange(values);
+            return this;
+        }
+
+        public TransactionQueryOptions ScanConsistency(QueryScanConsistency scanConsistency)
+        {
+            _scanConsistency = scanConsistency;
+            return this;
+        }
+
+        public TransactionQueryOptions FlexIndex(bool flexIndex)
+        {
+            _flexIndex = flexIndex;
+            return this;
+        }
+
+        public TransactionQueryOptions Serializer(ITypeSerializer serializer)
+        {
+            _serializer = serializer;
+            return this;
+        }
+
+        public TransactionQueryOptions ClientContextId(string clientContextId)
+        {
+            _clientContextId = clientContextId;
+            return this;
+        }
+
+        public TransactionQueryOptions ScanWait(TimeSpan scanWait)
+        {
+            _scanWait = scanWait;
+            return this;
+        }
+
+        public TransactionQueryOptions ScanCap(int capacity)
+        {
+            _scanCap = capacity;
+            return this;
+        }
+
+        public TransactionQueryOptions PipelineBatch(int batchSize)
+        {
+            _pipelineBatch = batchSize;
+            return this;
+        }
+
+        public TransactionQueryOptions PipelineCap(int capacity)
+        {
+            _pipelineCap = capacity;
+            return this;
+        }
+
+        public TransactionQueryOptions Readonly(bool @readonly)
+        {
+            _readonly = @readonly;
+            return this;
+        }
+
+        public TransactionQueryOptions AdHoc(bool adhoc)
+        {
+            _adhoc = adhoc;
+            return this;
+        }
+
+        public TransactionQueryOptions Raw(string key, object val)
+        {
+            switch (key)
+            {
+                case "txid":
+                case "txdata":
+                    throw new ArgumentOutOfRangeException(nameof(key), $"'{key}' is reserved for internal use.");
+            }
+
+            _rawParameters.Add(key, val);
+            return this;
+        }
+
+
+
+
+        public TransactionQueryOptions Timeout(TimeSpan timeout)
+        {
+            _timeout = timeout;
             return this;
         }
     }

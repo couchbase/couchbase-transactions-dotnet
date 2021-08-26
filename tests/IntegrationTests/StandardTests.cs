@@ -38,7 +38,8 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
         {
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             var durability = await TestUtil.InsertAndVerifyDurability(defaultCollection, docId, sampleDoc);
-            var txn = TestUtil.CreateTransaction(_fixture.Cluster, durability, _outputHelper);
+            using var cluster = await _fixture.OpenClusterAsync(_outputHelper);
+            var txn = TestUtil.CreateTransaction(cluster, durability, _outputHelper);
 
             int attempts = 0;
             txn.TestHooks = new DelegateTestHooks()

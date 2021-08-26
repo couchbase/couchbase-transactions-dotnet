@@ -203,7 +203,7 @@ namespace Couchbase.Transactions
             using var traceSpan = TraceSpan(parent: parentSpan);
             try
             {
-                var queryOptions = NonStreamingQuery().Parameter(MakeKeyspace(collection))
+                var queryOptions = NonStreamingQuery().Parameter(collection.MakeKeyspace())
                                                       .Parameter(id);
                 using var queryResult = await QueryWrapper<QueryGetResult>(0, null, "EXECUTE __get",
                     options: queryOptions,
@@ -221,16 +221,16 @@ namespace Couchbase.Transactions
                 Logger.LogDebug("GetWithQuery found doc (id = {id}, cas = {cas})", id, getResult.Cas);
                 return getResult;
             }
+            catch (TransactionOperationFailedException)
+            {
+                // If err is TransactionOperationFailed: propagate err.
+                throw;
+            }
             catch (Exception err)
             {
                 if (err is DocumentNotFoundException)
                 {
                     return null;
-                }
-
-                if (err is TransactionOperationFailedException)
-                {
-                    throw;
                 }
 
                 var classified = CreateError(this, err.Classify(), err).Build();
@@ -398,7 +398,7 @@ namespace Couchbase.Transactions
 
             try
             {
-                var queryOptions = NonStreamingQuery().Parameter(MakeKeyspace(doc.Collection))
+                var queryOptions = NonStreamingQuery().Parameter(doc.Collection.MakeKeyspace())
                                                .Parameter(doc.Id)
                                                .Parameter(content)
                                                .Parameter(new { });
@@ -416,6 +416,11 @@ namespace Couchbase.Transactions
 
                 var getResult = TransactionGetResult.FromQueryGet(doc.Collection, doc.Id, firstResult);
                 return getResult;
+            }
+            catch (TransactionOperationFailedException)
+            {
+                // If err is TransactionOperationFailed: propagate err.
+                throw;
             }
             catch (Exception err)
             {
@@ -558,7 +563,7 @@ namespace Couchbase.Transactions
 
             try
             {
-                var queryOptions = NonStreamingQuery().Parameter(MakeKeyspace(collection))
+                var queryOptions = NonStreamingQuery().Parameter(collection.MakeKeyspace())
                                                .Parameter(id)
                                                .Parameter(content)
                                                .Parameter(new { });
@@ -846,7 +851,7 @@ namespace Couchbase.Transactions
 
             try
             {
-                var queryOptions = NonStreamingQuery().Parameter(MakeKeyspace(doc.Collection))
+                var queryOptions = NonStreamingQuery().Parameter(doc.Collection.MakeKeyspace())
                                                       .Parameter(doc.Id)
                                                       .Parameter(new { });
                 using var queryResult = await QueryWrapper<QueryGetResult>(0, null, "EXECUTE __delete",
@@ -857,13 +862,13 @@ namespace Couchbase.Transactions
 
                 _ = await queryResult.FirstOrDefaultAsync().CAF();
             }
+            catch (TransactionOperationFailedException)
+            {
+                // If err is TransactionOperationFailed: propagate err.
+                throw;
+            }
             catch (Exception err)
             {
-                if (err is TransactionOperationFailedException)
-                {
-                    throw;
-                }
-
                 var builder = CreateError(this, err.Classify(), err);
                 if (err is DocumentNotFoundException || err is CasMismatchException)
                 {
@@ -948,6 +953,8 @@ namespace Couchbase.Transactions
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#CommitAsync
             CheckExpiryAndThrow(null, ITestHooks.HOOK_BEFORE_COMMIT);
             DoneCheck();
+            IsDone = true;
+
             if (_stagedMutations.Count ==  0)
             {
                 // If no mutation has been performed. Return success.
@@ -973,10 +980,14 @@ namespace Couchbase.Transactions
                     hookPoint: ITestHooks.HOOK_QUERY_COMMIT,
                     parentSpan: traceSpan.Item).CAF();
                 _state = AttemptStates.COMPLETED;
+                UnstagingComplete = true;
+            }
+            catch (TransactionOperationFailedException)
+            {
+                throw;
             }
             catch (Exception err)
             {
-                // Set isDone to true?
                 var ec = err.Classify();
                 if (ec == ErrorClass.FailExpiry)
                 {
@@ -987,6 +998,10 @@ namespace Couchbase.Transactions
                 }
 
                 throw CreateError(this, ec, err).DoNotRollbackAttempt().Build();
+            }
+            finally
+            {
+                IsDone = true;
             }
         }
 
@@ -1411,7 +1426,7 @@ namespace Couchbase.Transactions
                 statementId: fixmeStatementId,
                 scope: scope,
                 statement: statement,
-                options: options.Builder,
+                options: options.Build(),
                 hookPoint: ITestHooks.HOOK_QUERY,
                 parentSpan: traceSpan.Item
                 );
@@ -1419,7 +1434,7 @@ namespace Couchbase.Transactions
             return results;
         }
 
-        protected bool IsDone => _state != AttemptStates.NOTHING_WRITTEN && _state != AttemptStates.PENDING;
+        private bool IsDone { get; set; }
 
         internal Task RollbackInternal(bool isAppRollback, IRequestSpan? parentSpan)
             => _queryMode ? RollbackWithQuery(isAppRollback, parentSpan) : RollbackWithKv(isAppRollback, parentSpan);
@@ -1439,18 +1454,16 @@ namespace Couchbase.Transactions
 
             if (_state == AttemptStates.NOTHING_WRITTEN)
             {
+                IsDone = true;
                 return;
             }
 
-            if (_state == AttemptStates.COMMITTED
-            || _state == AttemptStates.COMPLETED
-            || _state == AttemptStates.ROLLED_BACK)
+            if (isAppRollback)
             {
-                throw ErrorBuilder.CreateError(this, ErrorClass.FailOther)
-                    .Cause(new InvalidOperationException("Cannot perform operations after the transaction has been comitted or rolled back."))
-                    .DoNotRollbackAttempt()
-                    .Build();
+                DoneCheck();
             }
+
+            IsDone = true;
 
             await SetAtrAborted(isAppRollback, traceSpan.Item).CAF();
             foreach (var sm in _stagedMutations)
@@ -1487,7 +1500,6 @@ namespace Couchbase.Transactions
             }
             catch (Exception err)
             {
-                // TODO: Set isDone = true
                 if (err is TransactionOperationFailedException)
                 {
                     throw;
@@ -1504,6 +1516,10 @@ namespace Couchbase.Transactions
                     .Build();
                 SaveErrorWrapper(toSave);
                 throw toSave;
+            }
+            finally
+            {
+                IsDone = true;
             }
         }
 
@@ -1591,7 +1607,8 @@ namespace Couchbase.Transactions
 
         protected void DoneCheck()
         {
-            if (IsDone)
+            var isDoneState = !(_state == AttemptStates.NOTHING_WRITTEN || _state == AttemptStates.PENDING);
+            if (IsDone || isDoneState)
             {
                 throw CreateError(this, ErrorClass.FailOther)
                     .Cause(new InvalidOperationException("Cannot perform operations after a transaction has been committed or rolled back."))
@@ -1951,36 +1968,43 @@ namespace Couchbase.Transactions
 
                         if (chosenError.AdditionalData != null && chosenError.AdditionalData.TryGetValue("cause", out var jtoken))
                         {
-                            var cause = jtoken.ToObject<QueryErrorCause>();
-                            Logger.LogWarning("query code={code} cause={cause} raise={raise}",
-                                code,
-                                Redactor.UserData(cause.cause),
-                                cause.raise
-                                );
-
-                            var builder = CreateError(this, ErrorClass.FailOther, err);
-                            TransactionOperationFailedException.FinalError toRaise = cause.raise switch
+                            try
                             {
-                                "failed_post_commit" => TransactionOperationFailedException.FinalError.TransactionFailedPostCommit,
-                                "commit_ambiguous" => TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous,
-                                "expired" => TransactionOperationFailedException.FinalError.TransactionExpired,
-                                "failed" => TransactionOperationFailedException.FinalError.TransactionFailed,
-                                _ => TransactionOperationFailedException.FinalError.TransactionFailed
-                            };
+                                var errorCause = jtoken.ToObject<QueryErrorCause>();
+                                Logger.LogWarning("query code={code} cause={cause} raise={raise}",
+                                    code,
+                                    Redactor.UserData(errorCause.cause),
+                                    errorCause.raise
+                                    );
 
-                            builder = builder.RaiseException(toRaise);
+                                var builder = CreateError(this, ErrorClass.FailOther, err);
+                                TransactionOperationFailedException.FinalError toRaise = errorCause.raise switch
+                                {
+                                    "failed_post_commit" => TransactionOperationFailedException.FinalError.TransactionFailedPostCommit,
+                                    "commit_ambiguous" => TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous,
+                                    "expired" => TransactionOperationFailedException.FinalError.TransactionExpired,
+                                    "failed" => TransactionOperationFailedException.FinalError.TransactionFailed,
+                                    _ => TransactionOperationFailedException.FinalError.TransactionFailed
+                                };
 
-                            if (cause.retry == true)
-                            {
-                                builder = builder.RetryTransaction();
+                                builder = builder.RaiseException(toRaise);
+
+                                if (errorCause.retry == true)
+                                {
+                                    builder = builder.RetryTransaction();
+                                }
+
+                                if (errorCause.rollback == false)
+                                {
+                                    builder.DoNotRollbackAttempt();
+                                }
+
+                                return builder.Build();
                             }
-
-                            if (cause.rollback == false)
+                            catch (Exception ex)
                             {
-                                builder.DoNotRollbackAttempt();
+                                throw;
                             }
-
-                            return builder.Build();
                         }
                     }
                 }
@@ -2049,6 +2073,13 @@ namespace Couchbase.Transactions
                 .Raw("txtimeout", $"{_overallContext.RemainingUntilExpiration.TotalMilliseconds}ms")
                 // TODO: EXT_CUSTOM_METADATA
                 .Raw("numatrs", AtrIds.NumAtrs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+            if (_overallContext.Config.MetadataCollection != null)
+            {
+                var mc = _overallContext.Config.MetadataCollection;
+                queryOptions.Raw("atrcollection", $"`{mc.Scope.Bucket.Name}`.`{mc.Scope.Name}`.`{mc.Name}`");
+            }
+
             var results = await QueryWrapper<QueryBeginWorkResponse>(
                 statementId: 0,
                 scope: null,
@@ -2073,8 +2104,6 @@ namespace Couchbase.Transactions
                 }
             }
         }
-
-        internal static string MakeKeyspace(ICouchbaseCollection collection) => $"default:`{collection.Scope.Bucket.Name}`.`{collection.Scope.Name}`.`{collection.Name}`";
 
         internal void SaveErrorWrapper(TransactionOperationFailedException ex)
         {

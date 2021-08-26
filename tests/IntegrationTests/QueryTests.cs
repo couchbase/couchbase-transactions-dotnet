@@ -36,7 +36,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             await defaultCollection.InsertAsync(docId, sampleDoc);
             var txnCfg = TransactionConfigBuilder.Create().LoggerFactory(loggerFactory);
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            await txn.QueryAsync(statement, TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+            await txn.QueryAsync(statement, TransactionQueryOptions.Create().Parameter("docId", docId));
         }
 
         [Fact]
@@ -77,7 +77,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             await defaultCollection.InsertAsync(docId, sampleDoc, options: new KeyValue.InsertOptions().Durability(KeyValue.DurabilityLevel.MajorityAndPersistToActive));
             var statement = "INSERT INTO default VALUES ($docId, {\"type\": \"example\" })";
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            var t = txn.QueryAsync(statement, TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+            var t = txn.QueryAsync(statement, TransactionQueryOptions.Create().Parameter("docId", docId));
             var err = await Assert.ThrowsAsync<TransactionFailedException>(() => t);
             Assert.False(err.Result.UnstagingComplete);
             if (err.InnerException is TransactionOperationFailedException tof)
@@ -101,7 +101,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
             var t = txn.RunAsync(async ctx =>
             {
-                _ = await ctx.QueryAsync<object>(statement, TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+                _ = await ctx.QueryAsync<object>(statement, TransactionQueryOptions.Create().Parameter("docId", docId));
             });
             var err = await Assert.ThrowsAsync<TransactionFailedException>(() => t);
             Assert.False(err.Result.UnstagingComplete);
@@ -125,7 +125,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var result = await txn.RunAsync(async ctx =>
             {
                 var inserted = await ctx.InsertAsync(defaultCollection, docId, sampleDoc);
-                var queryResult = await ctx.QueryAsync<object>("DELETE FROM default WHERE META().id = $docId", TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>("DELETE FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
             });
 
             // verify document was deleted.
@@ -142,7 +142,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var result = await txn.RunAsync(async ctx =>
             {
                 var inserted = await ctx.InsertAsync(defaultCollection, docId, sampleDoc);
-                var queryResult = await ctx.QueryAsync<object>("DELETE FROM default WHERE META().id = $docId", TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>("DELETE FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.Null(getResult);
             });
@@ -161,7 +161,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
             var result = await txn.RunAsync(async ctx =>
             {
-                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
             });
@@ -176,7 +176,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
             var result = await txn.RunAsync(async ctx =>
             {
-                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
                 var newDoc = new { foo = "replaced!" };
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
@@ -193,7 +193,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
             var result = await txn.RunAsync(async ctx =>
             {
-                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
                 var newDoc = new { foo = "replaced!" };
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
@@ -213,7 +213,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
             var result = await txn.RunAsync(async ctx =>
             {
-                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
                 var newDoc = new { foo = "replaced!" };
                 var getResult = await ctx.InsertAsync(defaultCollection, docId, sampleDoc);
                 Assert.NotNull(getResult);
@@ -234,10 +234,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.Majority, _outputHelper);
             var result = await txn.RunAsync(async ctx =>
             {
-                _ = await ctx.QueryAsync<object>("SELECT 'Hello World' AS Greeting", TransactionQueryOptions.QueryOptions());
+                _ = await ctx.QueryAsync<object>("SELECT 'Hello World' AS Greeting", TransactionQueryOptions.Create());
                 var noDoc = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.Null(noDoc);
-                var queryResult = await ctx.QueryAsync<object>("INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>("INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", TransactionQueryOptions.Create().Parameter("docId", docId));
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
                 await ctx.RemoveAsync(getResult);
@@ -256,10 +256,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.Majority, _outputHelper);
             var result = await txn.RunAsync(async ctx =>
             {
-                _ = await ctx.QueryAsync<object>("SELECT 'Hello World' AS Greeting", TransactionQueryOptions.QueryOptions());
+                _ = await ctx.QueryAsync<object>("SELECT 'Hello World' AS Greeting", TransactionQueryOptions.Create());
                 var noDoc = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.Null(noDoc);
-                var queryResult = await ctx.QueryAsync<object>("INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>("INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", TransactionQueryOptions.Create().Parameter("docId", docId));
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
                 await ctx.RemoveAsync(getResult);
@@ -280,7 +280,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             {
                 var noDoc = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.Null(noDoc);
-                var queryResult = await ctx.QueryAsync<object>("INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", TransactionQueryOptions.QueryOptions().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>("INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", TransactionQueryOptions.Create().Parameter("docId", docId));
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
 

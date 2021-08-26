@@ -1,4 +1,5 @@
-﻿using System;
+﻿#nullable enable
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,6 +10,7 @@ using Couchbase.Core.Compatibility;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.DataAccess;
 using Couchbase.Transactions.Internal.Test;
+using Couchbase.Transactions.Support;
 using Microsoft.Extensions.Logging;
 
 namespace Couchbase.Transactions.Cleanup.LostTransactions
@@ -38,7 +40,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
         public int RunningCount => _discoveredBuckets.Where(pbc => pbc.Value.Running).Count();
         public long TotalRunCount => _discoveredBuckets.Sum(pbc => pbc.Value.RunCount);
 
-        internal LostTransactionManager(ICluster cluster, ILoggerFactory loggerFactory, TimeSpan cleanupWindow, TimeSpan? keyValueTimeout, string? clientUuid = null, bool startDisabled = false, ICouchbaseCollection metadataCollection = null)
+        internal LostTransactionManager(ICluster cluster, ILoggerFactory loggerFactory, TimeSpan cleanupWindow, TimeSpan? keyValueTimeout, string? clientUuid = null, bool startDisabled = false, ICouchbaseCollection? metadataCollection = null)
         {
             ClientUuid = clientUuid ?? Guid.NewGuid().ToString();
             _logger = loggerFactory.CreateLogger<LostTransactionManager>();
@@ -199,7 +201,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
 
         private PerBucketCleaner CleanerForCollection(ICouchbaseCollection collection, bool startDisabled)
         {
-            _logger.LogDebug("New cleaner for {collection}", AttemptContext.MakeKeyspace(collection));
+            _logger.LogDebug("New cleaner for {collection}", collection.MakeKeyspace());
             var repository = new CleanerRepository(collection, _keyValueTimeout);
             var cleaner = new Cleaner(_cluster, _keyValueTimeout, _loggerFactory, creatorName: nameof(LostTransactionManager));
             return new PerBucketCleaner(ClientUuid, cleaner, repository, _cleanupWindow, _loggerFactory, startDisabled) { TestHooks = TestHooks };

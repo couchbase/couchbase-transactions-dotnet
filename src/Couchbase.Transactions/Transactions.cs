@@ -91,7 +91,7 @@ namespace Couchbase.Transactions
 
             if (config.CleanupLostAttempts)
             {
-                _lostTransactionsCleanup = new LostTransactionManager(_cluster, loggerFactory, config.CleanupWindow, config.KeyValueTimeout);
+                _lostTransactionsCleanup = new LostTransactionManager(_cluster, loggerFactory, config.CleanupWindow, config.KeyValueTimeout, metadataCollection: config.MetadataCollection);
             }
 
             // TODO: whatever the equivalent of 'cluster.environment().eventBus().publish(new TransactionsStarted(config));' is.
@@ -221,7 +221,7 @@ namespace Couchbase.Transactions
             using var rootSpan = _requestTracer.RequestSpan(nameof(QueryAsync))
                 .SetAttribute("db.couchbase.transactions.tximplicit", true);
 
-            options ??= TransactionQueryOptions.QueryOptions();
+            options ??= TransactionQueryOptions.Create();
 
             _ = await RunAsync(async ctx =>
             {

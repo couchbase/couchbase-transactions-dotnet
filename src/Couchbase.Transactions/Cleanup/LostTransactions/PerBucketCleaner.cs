@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -12,6 +13,7 @@ using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Error;
 using Couchbase.Transactions.Error.Internal;
 using Couchbase.Transactions.Internal.Test;
+using Couchbase.Transactions.Support;
 using Microsoft.Extensions.Logging;
 
 namespace Couchbase.Transactions.Cleanup.LostTransactions
@@ -29,6 +31,9 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
         private readonly Random _jitter = new Random();
         private readonly SemaphoreSlim _timerCallbackMutex = new SemaphoreSlim(1);
         private long _runCount = 0;
+        private object _atrsToCleanLock = new();
+        private ConcurrentBag<string> _atrsToClean = new ConcurrentBag<string>();
+
         public ICleanupTestHooks TestHooks { get; set; } = DefaultCleanupTestHooks.Instance;
         public long RunCount => Interlocked.Read(ref _runCount);
         public bool Running => !_cts.IsCancellationRequested;
@@ -74,27 +79,39 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
 
         public void Dispose()
         {
-            Stop();
             if (!_cts.IsCancellationRequested)
             {
+                Stop();
                 _processCleanupTimer.Change(-1, -1);
                 _processCleanupTimer.Dispose();
                 _cts.Cancel();
+            }
+            else
+            {
+                _logger.LogDebug("(already disposed)");
             }
         }
 
 
         public async ValueTask DisposeAsync()
         {
-            _logger.LogDebug("Disposing {bkt}", FullBucketName);
-            Dispose();
-            await RemoveClient().CAF();
+            if (!_cts.IsCancellationRequested)
+            {
+                _logger.LogDebug("Disposing {bkt}", FullBucketName);
+                Dispose();
+                await RemoveClient().CAF();
+            }
+            else
+            {
+                _logger.LogDebug("PerBucketCleaner for '{bkt}' is already disposed.", FullBucketName);
+            }
         }
 
         private async void TimerCallback(object? state)
         {
             if (_cts.IsCancellationRequested)
             {
+                _logger.LogDebug("TimerCallback after already disposed.");
                 return;
             }
 
@@ -109,9 +126,15 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
             {
                 _ = await ProcessClient().CAF();
             }
+            catch (AuthenticationFailureException)
+            {
+                // BF-CBD-3794
+                _logger.LogDebug("Exiting cleanup of '{bkt}' due to access error", FullBucketName);
+                await DisposeAsync().CAF();
+                return;
+            }
             catch (Exception ex)
             {
-                // TODO: If BF-CBD-3794 and the error is an AccessError, silently abort the thread.
                 _logger.LogWarning("Processing of bucket '{bkt}' failed unexpectedly: {ex}", FullBucketName, ex);
             }
             finally
@@ -124,13 +147,14 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
         internal async Task<ClientRecordDetails> ProcessClient(bool cleanupAtrs = true)
         {
             _logger.LogDebug("Looking for lost transactions on bucket '{bkt}'", FullBucketName);
-            ClientRecordDetails clientRecordDetails = await EnsureClientRecordIsUpToDate();
+            ClientRecordDetails clientRecordDetails = await EnsureClientRecordIsUpToDate().CAF();
             if (clientRecordDetails.OverrideActive)
             {
                 _logger.LogInformation("Cleanup of '{bkt}' is currently disabled by another actor.", FullBucketName);
                 return clientRecordDetails;
             }
 
+            var sw = Stopwatch.StartNew();
             using var boundedCleanup = new CancellationTokenSource(_cleanupWindow);
             using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(boundedCleanup.Token, _cts.Token);
 
@@ -138,21 +162,54 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
             if (cleanupAtrs)
             {
                 // we may not have enough time to process every ATR in the configured window.  Process a random member.
-                var randomAtrs = clientRecordDetails.AtrsHandledByThisClient.ToList();
-                var rnd = new Random();
-                randomAtrs.Sort((a, b) => (rnd.Next() % 2 == 0 ? 1 : -1));
-                foreach (var atrId in randomAtrs)
+                // heuristic: fill a bag with random members, process each until the bag is empty, then re-fill the bag.
+                //            This avoids the pathological case where randomization means ATRs get skipped and never/seldom processed.
+                long cleanedThisCycle = 0;
+                long atrsHandledByThisClient = ActiveTransactionRecords.AtrIds.NumAtrs;
+                while (cleanedThisCycle < ActiveTransactionRecords.AtrIds.NumAtrs)
                 {
+                    var checkAtrLimitWatch = Stopwatch.StartNew();
+                    string atrId;
+                    if (!_atrsToClean.TryTake(out atrId))
+                    {
+                        lock (_atrsToCleanLock)
+                        {
+                            _atrsToClean = new ConcurrentBag<string>(clientRecordDetails.AtrsHandledByThisClient);
+                            if (!_atrsToClean.TryTake(out atrId))
+                            {
+                                _logger.LogWarning("No ATRs handled by this client?");
+                                break;
+                            }
+
+                            _logger.LogDebug("Refilled bag with {totalAtrs} ATRids to process for on {bkt}", atrsHandledByThisClient, FullBucketName);
+                        }
+                    }
+
                     if (linkedSource.IsCancellationRequested)
                     {
-                        _logger.LogDebug("Exiting cleanup of ATR {atr} on {bkt} early due to cancellation.", atrId, FullBucketName);
+                        sw.Stop();
+                        _logger.LogDebug("Exiting cleanup of ATR {atr} on {bkt} early due to cancellation after {elapsedMs}ms and {cleanedThisCycle}/{totalAtrs} processed.", atrId, FullBucketName, sw.Elapsed.TotalMilliseconds, cleanedThisCycle, atrsHandledByThisClient);
                         break;
                     }
 
                     // Every checkAtrEveryNMillis, handle an ATR with id atrId
                     await CleanupAtr(atrId, linkedSource.Token).CAF();
                     Interlocked.Increment(ref _runCount);
-                    await Task.Delay(clientRecordDetails.CheckAtrTimeWindow).CAF();
+                    Interlocked.Increment(ref cleanedThisCycle);
+                    var necessaryDelay = (int)Math.Max(0, Math.Min(_cleanupWindow.TotalMilliseconds, (clientRecordDetails.CheckAtrTimeWindow - checkAtrLimitWatch.Elapsed).TotalMilliseconds));
+
+                    // under normal circumstances, the cleanup window will be 60 seconds, the delay will be significant,
+                    // and Task.Delay is appropriate and efficient
+                    if (necessaryDelay >= 10)
+                    {
+                        await Task.Delay(necessaryDelay).CAF();
+                    }
+                    // if the user has specified a short cleanup window (most likely tests), then the delay will be short
+                    // and Task.Delay's non-guaranteed behavior will result in extra delay and be too slow to maintain rhythm.
+                    else if (necessaryDelay >= 1)
+                    {
+                        SpinWait.SpinUntil(() => checkAtrLimitWatch.Elapsed > clientRecordDetails.CheckAtrTimeWindow, _cleanupWindow);
+                    }
                 }
             }
 
@@ -260,6 +317,11 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                 await TestHooks.BeforeAtrGet(atrId).CAF();
                 (attempts, parsedHlc) = await _repository.LookupAttempts(atrId).CAF();
             }
+            catch (AuthenticationFailureException)
+            {
+                // BF-CBD-3794
+                throw;
+            }
             catch (Exception ex)
             {
                 var ec = ex.Classify();
@@ -268,7 +330,7 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                     case ErrorClass.FailDocNotFound:
                     case ErrorClass.FailPathNotFound:
                         // If the ATR is not present, continue as success.
-                        _logger.LogDebug("ATR {atrId} not present: {ec}", atrId, ec);
+                        _logger.LogTrace("ATR {atrId} not present on {collection}: {ec}", atrId,_repository.Collection.MakeKeyspace(), ec);
                         return;
                     default:
                         // Else if there’s an error, continue as success.
@@ -350,6 +412,12 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                     _logger.LogDebug("Cannot continue cleanup after underlying data access has been disposed for {bkt}", FullBucketName);
                     return;
                 }
+                catch (AuthenticationFailureException err)
+                {
+                    // BF-CBD-3794
+                    _logger.LogWarning("Failed to remove client for '{bkt}' due to auth error", FullBucketName);
+                    break;
+                }
                 catch (Exception ex)
                 {
                     var ec = ex.Classify();
@@ -361,7 +429,8 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                             _logger.LogInformation("{ec} ignored during Remove Lost Transaction Client.", ec);
                             return;
                         default:
-                            _logger.LogDebug("{ec} during Remove Lost Transaction Client, retryCount = {rc}", ec, retryCount);
+                            _logger.LogWarning("{ec} during Remove Lost Transaction Client, retryCount = {rc}, err = {err}", ec, retryCount, ex.Message);
+                            _logger.LogDebug("err = {err}", ex);
                             await Task.Delay(retryDelay).CAF();
                             break;
                     }

@@ -43,7 +43,7 @@ namespace Couchbase.Transactions.Internal.Test
         public const string HOOK_QUERY_KV_GET = "queryKvGet";
         public const string HOOK_QUERY_KV_REPLACE = "queryKvReplace";
         public const string HOOK_QUERY_KV_REMOVE = "queryKvRemove";
-        public const string HOOK_QUERY_KV_INSERT = "querykvInsert";
+        public const string HOOK_QUERY_KV_INSERT = "queryKvInsert";
         public const string HOOK_QUERY_ROLLBACK = "queryRollback";
 
         Task<int?> BeforeAtrCommit(AttemptContext self) => Task.FromResult<int?>(0);
