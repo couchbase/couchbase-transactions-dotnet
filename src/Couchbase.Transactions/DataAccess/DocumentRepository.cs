@@ -9,6 +9,7 @@ using Couchbase.Transactions.Components;
 using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Internal;
 using Couchbase.Transactions.Support;
+using Newtonsoft.Json;
 
 namespace Couchbase.Transactions.DataAccess
 {
@@ -18,6 +19,8 @@ namespace Couchbase.Transactions.DataAccess
         private readonly TimeSpan? _keyValueTimeout;
         private readonly DurabilityLevel _durability;
         private readonly string _attemptId;
+        private readonly JsonSerializerSettings _metadataSerializerSettings;
+        private readonly JsonSerializer _metadataSerializer;
 
         public DocumentRepository(TransactionContext overallContext, TimeSpan? keyValueTimeout, DurabilityLevel durability, string attemptId)
         {
@@ -25,6 +28,14 @@ namespace Couchbase.Transactions.DataAccess
             _keyValueTimeout = keyValueTimeout;
             _durability = durability;
             _attemptId = attemptId;
+
+
+            _metadataSerializerSettings = new JsonSerializerSettings()
+            {
+                NullValueHandling = NullValueHandling.Ignore
+            };
+
+            _metadataSerializer = JsonSerializer.Create(_metadataSerializerSettings);
         }
 
         public async Task<(ulong updatedCas, MutationToken mutationToken)> MutateStagedInsert(ICouchbaseCollection collection, string docId, object content, IAtrRepository atr, ulong? cas = null)
@@ -67,8 +78,33 @@ namespace Couchbase.Transactions.DataAccess
 
         public async Task<(ulong updatedCas, MutationToken mutationToken)> MutateStagedRemove(TransactionGetResult doc, IAtrRepository atr)
         {
-            var specs = CreateMutationSpecs(atr, "remove", TransactionFields.StagedDataRemoveKeyword, doc.DocumentMetadata);
+            // For ExtAllKvCombinations, the Java implementation was updated to write "txn" as one JSON blob instead of multiple MutateInSpecs.
+            // Remove is the one where it had to be updated, given that we need to remove the staged data only if it exists.
+            var txn = new TransactionXattrs()
+            {
+                Operation = new StagedOperation() { Type = "remove" },
+                Id = new CompositeId() { Transactionid = _overallContext.TransactionId, AttemptId = _attemptId },
+                AtrRef = new AtrRef() { Id = atr.AtrId, ScopeName = atr.ScopeName, BucketName = atr.BucketName, CollectionName = atr.CollectionName },
+                RestoreMetadata = doc.DocumentMetadata
+            };
+
+            var txnAsJObject = Newtonsoft.Json.Linq.JObject.FromObject(txn, _metadataSerializer);
+
+            var specs = new MutateInSpec[]
+            {
+                MutateInSpec.Upsert(TransactionFields.TransactionInterfacePrefixOnly, txnAsJObject, isXattr: true),
+                MutateInSpec.Upsert(TransactionFields.Crc32, MutationMacro.ValueCRC32c, createPath: true, isXattr: true),
+            };
+
             var opts = GetMutateInOptions(StoreSemantics.Replace).Cas(doc.Cas).CreateAsDeleted(true);
+            var updatedDoc = await doc.Collection.MutateInAsync(doc.Id, specs, opts).CAF();
+            return (updatedDoc.Cas, updatedDoc.MutationToken);
+        }
+
+        public async Task<(ulong updatedCas, MutationToken mutationToken)> RemoveStagedInsert(TransactionGetResult doc)
+        {
+            var specs = new MutateInSpec[] { MutateInSpec.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true) };
+            var opts = GetMutateInOptions(StoreSemantics.Replace).Cas(doc.Cas).AccessDeleted(true);
             var updatedDoc = await doc.Collection.MutateInAsync(doc.Id, specs, opts).CAF();
             return (updatedDoc.Cas, updatedDoc.MutationToken);
         }
@@ -195,7 +231,8 @@ namespace Couchbase.Transactions.DataAccess
             switch (opType)
             {
                 case "remove":
-                    // do nothing with staged data.
+                    specs.Add(MutateInSpec.Upsert(TransactionFields.StagedData, new { }, isXattr: true));
+                    specs.Add(MutateInSpec.Remove(TransactionFields.StagedData, isXattr: true));
                     break;
                 case "replace":
                 case "insert":

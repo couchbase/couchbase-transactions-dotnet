@@ -200,7 +200,7 @@ namespace Couchbase.Transactions
                                 throw new TransactionCommitAmbiguousException("Transaction may have failed to commit.", ex.Cause, result);
 
                             default:
-                                throw new TransactionFailedException("Transaction failed.", ex.Cause, result);
+                                throw new TransactionFailedException("Transaction failed.", ex.Cause ?? ex, result);
                         }
                     }
                 }
@@ -225,7 +225,7 @@ namespace Couchbase.Transactions
 
             _ = await RunAsync(async ctx =>
             {
-                _ = await ctx.QueryAsync<object>(statement, options, scope, rootSpan).CAF();
+                _ = await ctx.QueryAsync<object>(statement, options, true, scope, rootSpan).CAF();
             }).CAF();
         }
 

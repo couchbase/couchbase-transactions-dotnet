@@ -120,6 +120,8 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
         public string Name { get; } = "default";
         public IScope Scope { get; set; } = new Mock<IScope>().Object;
         public IBinaryCollection Binary { get; } = new Mock<IBinaryCollection>().Object;
+
+        public bool IsDefaultCollection => Name == "_default";
     }
 
     internal static class MockCollectionExtensions
@@ -151,6 +153,8 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
         public IScope Scope { get; }
 
         public IBinaryCollection Binary => throw new NotImplementedException();
+
+        public bool IsDefaultCollection => Name == "_default";
 
         public Task<IExistsResult> ExistsAsync(string id, ExistsOptions? options = null)
         {

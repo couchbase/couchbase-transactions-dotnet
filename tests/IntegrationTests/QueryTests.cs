@@ -75,6 +75,9 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             _outputHelper.WriteLine(sampleDoc.ToString());
             await defaultCollection.InsertAsync(docId, sampleDoc, options: new KeyValue.InsertOptions().Durability(KeyValue.DurabilityLevel.MajorityAndPersistToActive));
+            var getResult = await defaultCollection.GetAsync(docId);
+            Assert.NotNull(getResult);
+            _outputHelper.WriteLine($"Blocking Doc = {getResult.ContentAs<object>()}");
             var statement = "INSERT INTO default VALUES ($docId, {\"type\": \"example\" })";
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
             var t = txn.QueryAsync(statement, TransactionQueryOptions.Create().Parameter("docId", docId));
@@ -87,7 +90,8 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             }
             else if (!(err.InnerException is DocumentExistsException))
             {
-                Assert.True(false, "Unexpected inner exception: " + err.InnerException.ToString());
+                // flaky based on Contains.  May need to change.
+                Assert.Contains("document already exists", err.ToString());
             }
         }
 
@@ -99,10 +103,10 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             await defaultCollection.InsertAsync(docId, sampleDoc, options: new KeyValue.InsertOptions().Durability(KeyValue.DurabilityLevel.MajorityAndPersistToActive));
             var statement = "INSERT INTO default VALUES ($docId, {\"type\": \"example\" })";
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            var t = txn.RunAsync(async ctx =>
+            var t = txn.RunAsync((Func<AttemptContext, Task>)(async ctx =>
             {
-                _ = await ctx.QueryAsync<object>(statement, TransactionQueryOptions.Create().Parameter("docId", docId));
-            });
+                _ = await ctx.QueryAsync<object>((string)statement, (TransactionQueryOptions)TransactionQueryOptions.Create().Parameter((string)"docId", (object)docId));
+            }));
             var err = await Assert.ThrowsAsync<TransactionFailedException>(() => t);
             Assert.False(err.Result.UnstagingComplete);
             if (err.InnerException is TransactionOperationFailedException tof)
@@ -112,7 +116,8 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             }
             else if (!(err.InnerException is DocumentExistsException))
             {
-                Assert.True(false, "Unexpected inner exception: " + err.InnerException.ToString());
+                // flaky based on Contains.  May need to change.
+                Assert.Contains("document already exists", err.ToString());
             }
         }
 
@@ -122,11 +127,11 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             _outputHelper.WriteLine(sampleDoc.ToString());
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            var result = await txn.RunAsync(async ctx =>
+            var result = await txn.RunAsync((Func<AttemptContext, Task>)(async ctx =>
             {
                 var inserted = await ctx.InsertAsync(defaultCollection, docId, sampleDoc);
-                var queryResult = await ctx.QueryAsync<object>("DELETE FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
-            });
+                var queryResult = await ctx.QueryAsync<object>((string)"DELETE FROM default WHERE META().id = $docId", (TransactionQueryOptions)TransactionQueryOptions.Create().Parameter((string)"docId", (object)docId));
+            }));
 
             // verify document was deleted.
             var getCheck = defaultCollection.GetAsync(docId);
@@ -139,13 +144,13 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             _outputHelper.WriteLine(sampleDoc.ToString());
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            var result = await txn.RunAsync(async ctx =>
+            var result = await txn.RunAsync((Func<AttemptContext, Task>)(async ctx =>
             {
                 var inserted = await ctx.InsertAsync(defaultCollection, docId, sampleDoc);
-                var queryResult = await ctx.QueryAsync<object>("DELETE FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>((string)"DELETE FROM default WHERE META().id = $docId", (TransactionQueryOptions)TransactionQueryOptions.Create().Parameter((string)"docId", (object)docId));
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.Null(getResult);
-            });
+            }));
 
             // verify document was deleted.
             var getCheck = defaultCollection.GetAsync(docId);
@@ -159,12 +164,12 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             _outputHelper.WriteLine(sampleDoc.ToString());
             await defaultCollection.InsertAsync(docId, sampleDoc, options: new KeyValue.InsertOptions().Durability(KeyValue.DurabilityLevel.MajorityAndPersistToActive));
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            var result = await txn.RunAsync(async ctx =>
+            var result = await txn.RunAsync((Func<AttemptContext, Task>)(async ctx =>
             {
-                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>((string)"SELECT * FROM default WHERE META().id = $docId", (TransactionQueryOptions)TransactionQueryOptions.Create().Parameter((string)"docId", (object)docId));
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
-            });
+            }));
         }
 
         [Fact]
@@ -174,14 +179,14 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             _outputHelper.WriteLine(sampleDoc.ToString());
             await defaultCollection.InsertAsync(docId, sampleDoc, options: new KeyValue.InsertOptions().Durability(KeyValue.DurabilityLevel.MajorityAndPersistToActive));
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            var result = await txn.RunAsync(async ctx =>
+            var result = await txn.RunAsync((Func<AttemptContext, Task>)(async ctx =>
             {
-                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>((string)"SELECT * FROM default WHERE META().id = $docId", (TransactionQueryOptions)TransactionQueryOptions.Create().Parameter((string)"docId", (object)docId));
                 var newDoc = new { foo = "replaced!" };
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
                 var replacedDoc = await ctx.ReplaceAsync(getResult!, newDoc);
-            });
+            }));
         }
 
         [Fact]
@@ -191,14 +196,14 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             _outputHelper.WriteLine(sampleDoc.ToString());
             await defaultCollection.InsertAsync(docId, sampleDoc, options: new KeyValue.InsertOptions().Durability(KeyValue.DurabilityLevel.MajorityAndPersistToActive));
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            var result = await txn.RunAsync(async ctx =>
+            var result = await txn.RunAsync((Func<AttemptContext, Task>)(async ctx =>
             {
-                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>((string)"SELECT * FROM default WHERE META().id = $docId", (TransactionQueryOptions)TransactionQueryOptions.Create().Parameter((string)"docId", (object)docId));
                 var newDoc = new { foo = "replaced!" };
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
                 await ctx.RemoveAsync(getResult!);
-            });
+            }));
 
             // verify document was deleted.
             var getCheck = defaultCollection.GetAsync(docId);
@@ -211,15 +216,15 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             _outputHelper.WriteLine(sampleDoc.ToString());
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            var result = await txn.RunAsync(async ctx =>
+            var result = await txn.RunAsync((Func<AttemptContext, Task>)(async ctx =>
             {
-                var queryResult = await ctx.QueryAsync<object>("SELECT * FROM default WHERE META().id = $docId", TransactionQueryOptions.Create().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>((string)"SELECT * FROM default WHERE META().id = $docId", (TransactionQueryOptions)TransactionQueryOptions.Create().Parameter((string)"docId", (object)docId));
                 var newDoc = new { foo = "replaced!" };
                 var getResult = await ctx.InsertAsync(defaultCollection, docId, sampleDoc);
                 Assert.NotNull(getResult);
                 var roundTrip = getResult.ContentAs<TestUtil.SampleDoc>();
                 Assert.Equal(sampleDoc, roundTrip);
-            });
+            }));
 
             // verify document was inserted.
             var getCheck = await defaultCollection.GetAsync(docId);
@@ -232,16 +237,16 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             _outputHelper.WriteLine(sampleDoc.ToString());
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.Majority, _outputHelper);
-            var result = await txn.RunAsync(async ctx =>
+            var result = await txn.RunAsync((Func<AttemptContext, Task>)(async ctx =>
             {
-                _ = await ctx.QueryAsync<object>("SELECT 'Hello World' AS Greeting", TransactionQueryOptions.Create());
+                _ = await ctx.QueryAsync<object>((string)"SELECT 'Hello World' AS Greeting", (TransactionQueryOptions)TransactionQueryOptions.Create());
                 var noDoc = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.Null(noDoc);
-                var queryResult = await ctx.QueryAsync<object>("INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", TransactionQueryOptions.Create().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>((string)"INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", (TransactionQueryOptions)TransactionQueryOptions.Create().Parameter((string)"docId", (object)docId));
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
                 await ctx.RemoveAsync(getResult);
-            });
+            }));
 
             // verify document was deleted.
             var getCheck = defaultCollection.GetAsync(docId);
@@ -254,16 +259,16 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             _outputHelper.WriteLine(sampleDoc.ToString());
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.Majority, _outputHelper);
-            var result = await txn.RunAsync(async ctx =>
+            var result = await txn.RunAsync((Func<AttemptContext, Task>)(async ctx =>
             {
-                _ = await ctx.QueryAsync<object>("SELECT 'Hello World' AS Greeting", TransactionQueryOptions.Create());
+                _ = await ctx.QueryAsync<object>((string)"SELECT 'Hello World' AS Greeting", (TransactionQueryOptions)TransactionQueryOptions.Create());
                 var noDoc = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.Null(noDoc);
-                var queryResult = await ctx.QueryAsync<object>("INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", TransactionQueryOptions.Create().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>((string)"INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", (TransactionQueryOptions)TransactionQueryOptions.Create().Parameter((string)"docId", (object)docId));
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
                 await ctx.RemoveAsync(getResult);
-            });
+            }));
 
             // verify document was deleted.
             var getCheck = defaultCollection.GetAsync(docId);
@@ -276,16 +281,16 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             (var defaultCollection, var docId, var sampleDoc) = await TestUtil.PrepSampleDoc(_fixture, _outputHelper);
             _outputHelper.WriteLine(sampleDoc.ToString());
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            var result = await txn.RunAsync(async ctx =>
+            var result = await txn.RunAsync((Func<AttemptContext, Task>)(async ctx =>
             {
                 var noDoc = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.Null(noDoc);
-                var queryResult = await ctx.QueryAsync<object>("INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", TransactionQueryOptions.Create().Parameter("docId", docId));
+                var queryResult = await ctx.QueryAsync<object>((string)"INSERT INTO `default` VALUES ($docId, {\"content\":\"initial\"})", (TransactionQueryOptions)TransactionQueryOptions.Create().Parameter((string)"docId", (object)docId));
                 var getResult = await ctx.GetOptionalAsync(defaultCollection, docId);
                 Assert.NotNull(getResult);
 
                 await ctx.RemoveAsync(getResult);
-            });
+            }));
 
             // verify document was deleted.
             var getCheck = defaultCollection.GetAsync(docId);

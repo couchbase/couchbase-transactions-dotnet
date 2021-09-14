@@ -57,7 +57,7 @@ namespace Couchbase.Transactions
         private AttemptStates _state = AttemptStates.NOTHING_WRITTEN;
         private readonly ErrorTriage _triage;
 
-        private readonly List<StagedMutation> _stagedMutations = new List<StagedMutation>();
+        private readonly StagedMutationCollection _stagedMutations = new StagedMutationCollection();
         private readonly object _initAtrLock = new();
         private IAtrRepository? _atr = null;
         private IDocumentRepository _docs;
@@ -150,7 +150,7 @@ namespace Couchbase.Transactions
                 Protocol 2.0 amendment: and TransactionGetResult::links().isDeleted() reflecting whether it is a tombstone or not.
                Else if the doc already exists in there as a remove, return empty.
              */
-            var staged = FindStaged(collection, id);
+            var staged = _stagedMutations.Find(collection, id);
             if (staged != null)
             {
                 switch (staged.Type)
@@ -358,16 +358,6 @@ namespace Couchbase.Transactions
             }
         }
 
-        private StagedMutation FindStaged(ICouchbaseCollection collection, string id)
-        {
-            return _stagedMutations.Find(sm => sm.Doc.Id == id
-                                               && sm.Doc.Collection.Name == collection.Name
-                                               && sm.Doc.Collection.Scope.Name == collection.Scope.Name
-                                               && sm.Doc.Collection.Scope.Bucket.Name == collection.Scope.Bucket.Name);
-        }
-
-        private StagedMutation FindStaged(TransactionGetResult doc) => FindStaged(doc.Collection, doc.Id);
-
         /// <summary>
         /// Replace the content of a document previously fetched in this transaction with new content.
         /// </summary>
@@ -383,12 +373,24 @@ namespace Couchbase.Transactions
             using var traceSpan = TraceSpan(parent: parentSpan);
             DoneCheck();
             CheckErrors();
+
+            var stagedOld = _stagedMutations.Find(doc);
+            if (stagedOld?.Type == StagedMutationType.Remove)
+            {
+                throw CreateError(this, ErrorClass.FailDocNotFound, new DocumentNotFoundException()).Build();
+            }
+
             CheckExpiryAndThrow(doc.Id, ITestHooks.HOOK_REPLACE);
             await CheckWriteWriteConflict(doc, ForwardCompatibility.WriteWriteConflictReplacing, traceSpan.Item).CAF();
             await InitAtrIfNeeded(doc.Collection, doc.Id, traceSpan.Item);
             await SetAtrPendingIfFirstMutation(doc.Collection, traceSpan.Item);
 
-            return await CreateStagedReplace(doc, content, accessDeleted: doc.IsDeleted, parentSpan: traceSpan.Item);
+            if (stagedOld?.Type == StagedMutationType.Insert)
+            {
+                return await CreateStagedInsert(doc.Collection, doc.Id, content, stagedOld.Doc.Cas, traceSpan.Item).CAF();
+            }
+
+            return await CreateStagedReplace(doc, content, accessDeleted: doc.IsDeleted, parentSpan: traceSpan.Item).CAF();
         }
         private async Task<TransactionGetResult> ReplaceWithQuery(TransactionGetResult doc, object content, IRequestSpan? parentSpan)
         {
@@ -451,7 +453,7 @@ namespace Couchbase.Transactions
 
         private async Task SetAtrPendingIfFirstMutation(ICouchbaseCollection collection, IRequestSpan? parentSpan)
         {
-            if (_stagedMutations.Count == 0)
+            if (_stagedMutations.IsEmpty)
             {
                 await SetAtrPending(parentSpan);
             }
@@ -474,7 +476,7 @@ namespace Couchbase.Transactions
 
                     doc.Cas = updatedCas;
 
-                    var stagedOld = FindStaged(doc);
+                    var stagedOld = _stagedMutations.Find(doc);
                     if (stagedOld != null)
                     {
                         _stagedMutations.Remove(stagedOld);
@@ -540,12 +542,10 @@ namespace Couchbase.Transactions
             DoneCheck();
             CheckErrors();
 
-            // If this document already exists in StagedMutation, raise Error(FAIL_OTHER, cause=IllegalStateException [or platform-specific equivalent]).
-            if (_stagedMutations.Any(sm => sm.Doc.FullyQualifiedId == TransactionGetResult.GetFullyQualifiedId(collection, id)))
+            var stagedOld = _stagedMutations.Find(collection, id);
+            if (stagedOld?.Type == StagedMutationType.Insert || stagedOld?.Type == StagedMutationType.Replace)
             {
-                throw CreateError(this, ErrorClass.FailOther)
-                    .Cause(new InvalidOperationException("Document is already staged for a mutation."))
-                    .Build();
+                throw new DocumentExistsException();
             }
 
             CheckExpiryAndThrow(id, hookPoint: ITestHooks.HOOK_INSERT);
@@ -553,6 +553,10 @@ namespace Couchbase.Transactions
             await InitAtrIfNeeded(collection, id, traceSpan.Item);
             await SetAtrPendingIfFirstMutation(collection, traceSpan.Item);
 
+            if (stagedOld?.Type == StagedMutationType.Remove)
+            {
+                return await CreateStagedReplace(stagedOld.Doc, content, true, traceSpan.Item).CAF();
+            }
 
             return await CreateStagedInsert(collection, id, content, parentSpan: traceSpan.Item).CAF();
         }
@@ -757,13 +761,6 @@ namespace Couchbase.Transactions
             }
         }
 
-        private IEnumerable<StagedMutation> StagedInserts =>
-            _stagedMutations.Where(sm => sm.Type == StagedMutationType.Insert);
-
-        private IEnumerable<StagedMutation> StagedReplaces => _stagedMutations.Where(sm => sm.Type == StagedMutationType.Replace);
-        private IEnumerable<StagedMutation> StagedRemoves => _stagedMutations.Where(sm => sm.Type == StagedMutationType.Remove);
-
-
         private async Task SetAtrPending(IRequestSpan? parentSpan)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
@@ -830,11 +827,31 @@ namespace Couchbase.Transactions
             DoneCheck();
             CheckErrors();
             CheckExpiryAndThrow(doc.Id, ITestHooks.HOOK_REMOVE);
-            if (StagedInserts.Any(sm => sm.Doc.FullyQualifiedId == doc.FullyQualifiedId))
+
+            var stagedOld = _stagedMutations.Find(doc);
+            if (stagedOld != null)
             {
-                throw CreateError(this, ErrorClass.FailOther)
-                    .Cause(new InvalidOperationException("Document is already staged for insert."))
-                    .Build();
+                if (stagedOld != null)
+                {
+                    if (stagedOld.Type == StagedMutationType.Remove)
+                    {
+                        throw CreateError(this, ErrorClass.FailDocNotFound, new DocumentNotFoundException()).Build();
+                    }
+                    else if (stagedOld.Type == StagedMutationType.Insert)
+                    {
+                        try
+                        {
+                            await RemoveStagedInsert(doc, traceSpan.Item).CAF();
+                        }
+                        catch (TransactionOperationFailedException err)
+                        {
+                            SaveErrorWrapper(err);
+                            throw;
+                        }
+
+                        return;
+                    }
+                }
             }
 
             await CheckWriteWriteConflict(doc, ForwardCompatibility.WriteWriteConflictRemoving, traceSpan.Item).CAF();
@@ -894,19 +911,9 @@ namespace Couchbase.Transactions
                     await _testHooks.AfterStagedRemoveComplete(this, doc.Id).CAF();
 
                     doc.Cas = updatedCas;
-                    if (_stagedMutations.Exists(sm => sm.Doc.Id == doc.Id && sm.Type == StagedMutationType.Insert))
-                    {
-                        // TXNJ-35: handle insert-delete with same doc
 
-                        // CommitAsync+rollback: Want to delete the staged empty doc
-                        // However this is hard in practice.  If we remove from stagedInsert and add to
-                        // stagedRemove then commit will work fine, but rollback will not remove the doc.
-                        // So, fast fail this scenario.
-                        throw new InvalidOperationException(
-                            $"doc {Redactor.UserData(doc.Id)} is being removed after being inserted in the same txn.");
-                    }
 
-                    var stagedRemove = new StagedMutation(doc, TransactionFields.StagedDataRemoveKeyword,
+                    var stagedRemove = new StagedMutation(doc, null,
                         StagedMutationType.Remove, mutationToken);
                     _stagedMutations.Add(stagedRemove);
                 }
@@ -928,6 +935,43 @@ namespace Couchbase.Transactions
             }
         }
 
+        private async Task RemoveStagedInsert(TransactionGetResult doc, IRequestSpan? parentSpan)
+        {
+            using var traceSpan = TraceSpan(parent: parentSpan);
+            if (HasExpiredClientSide(doc.Id, "removeStagedInsert"))
+            {
+                throw CreateError(this, ErrorClass.FailExpiry)
+                    .Cause(new AttemptExpiredException(this, "Expired in 'removeStagedInsert'"))
+                    .DoNotRollbackAttempt()
+                    .RaiseException(TransactionOperationFailedException.FinalError.TransactionExpired)
+                    .Build();
+            }
+
+            try
+            {
+                await _testHooks.BeforeRemoveStagedInsert(this, doc.Id).CAF();
+                (var removedCas, _) = await _docs.RemoveStagedInsert(doc).CAF();
+                await _testHooks.AfterRemoveStagedInsert(this, doc.Id).CAF();
+                doc.Cas = removedCas;
+                _stagedMutations.Remove(doc);
+            }
+            catch (Exception err)
+            {
+                var ec = err.Classify();
+                if (ec == ErrorClass.TransactionOperationFailed)
+                {
+                    throw;
+                }
+
+                if (ec == ErrorClass.FailHard)
+                {
+                    throw CreateError(this, ec, err).DoNotRollbackAttempt().Build();
+                }
+
+                throw CreateError(this, ec, err).RetryTransaction().Build();
+            }
+        }
+
         internal async Task AutoCommit(IRequestSpan? parentSpan)
         {
             switch (_state)
@@ -939,26 +983,37 @@ namespace Couchbase.Transactions
             }
         }
 
-        public Task CommitAsync(IRequestSpan? parentSpan = null)
-            => _queryMode ? CommitWithQuery(parentSpan) : CommitWithKv(parentSpan);
-
-        private async Task CommitWithKv(IRequestSpan? parentSpan)
+        public async Task CommitAsync(IRequestSpan? parentSpan = null)
         {
-            using var traceSpan = TraceSpan(parent: parentSpan);
             if (!_previousErrors.IsEmpty)
             {
                 _triage.ThrowIfCommitWithPreviousErrors(_previousErrors.Values);
             }
+
+            if (_queryMode)
+            {
+                await CommitWithQuery(parentSpan).CAF();
+            }
+            else
+            {
+                await CommitWithKv(parentSpan).CAF();
+            }
+        }
+
+        private async Task CommitWithKv(IRequestSpan? parentSpan)
+        {
+            using var traceSpan = TraceSpan(parent: parentSpan);
 
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#CommitAsync
             CheckExpiryAndThrow(null, ITestHooks.HOOK_BEFORE_COMMIT);
             DoneCheck();
             IsDone = true;
 
-            if (_stagedMutations.Count ==  0)
+            if (_atr?.AtrId == null || _atr?.Collection == null)
             {
                 // If no mutation has been performed. Return success.
                 // This will leave state as NOTHING_WRITTEN,
+                Logger.LogInformation("Nothing to commit.");
                 return;
             }
 
@@ -1046,7 +1101,8 @@ namespace Couchbase.Transactions
         private async Task UnstageDocs(IRequestSpan? parentSpan)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
-            foreach (var sm in _stagedMutations)
+            var allStagedMutations = _stagedMutations.ToList();
+            foreach (var sm in allStagedMutations)
             {
                 (var cas, var content) = await FetchIfNeededBeforeUnstage(sm).CAF();
                 switch (sm.Type)
@@ -1223,7 +1279,7 @@ namespace Couchbase.Transactions
                 {
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ATR_COMMIT);
                     await _testHooks.BeforeAtrCommit(this).CAF();
-                    await _atr.MutateAtrCommit(_stagedMutations).CAF();
+                    await _atr.MutateAtrCommit(_stagedMutations.ToList()).CAF();
                     Logger.LogDebug("{method} for {atr} (attempt={attemptId})", nameof(SetAtrCommit), Redactor.UserData(_atr.FullPath), AttemptId);
                     await _testHooks.AfterAtrCommit(this).CAF();
                     _state = AttemptStates.COMMITTED;
@@ -1330,7 +1386,7 @@ namespace Couchbase.Transactions
                 {
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ATR_ABORT);
                     await _testHooks.BeforeAtrAborted(this).CAF();
-                    await _atr!.MutateAtrAborted(_stagedMutations).CAF();
+                    await _atr!.MutateAtrAborted(_stagedMutations.ToList()).CAF();
                     Logger.LogDebug("{method} for {atr} (attempt={attemptId})", nameof(SetAtrAborted), Redactor.UserData(_atr.FullPath), AttemptId);
                     await _testHooks.AfterAtrAborted(this).CAF();
                     _state = AttemptStates.ABORTED;
@@ -1418,7 +1474,10 @@ namespace Couchbase.Transactions
         /// <remarks>Calling this method on AttemptContext is usually unnecessary, as unhandled exceptions will trigger a rollback automatically.</remarks>
         public Task RollbackAsync(IRequestSpan? parentSpan = null) => this.RollbackInternal(true, parentSpan);
 
-        public async Task<IQueryResult<T>> QueryAsync<T>(string statement, TransactionQueryOptions options, IScope? scope = null, IRequestSpan? parentSpan = null)
+        public Task<IQueryResult<T>> QueryAsync<T>(string statement, TransactionQueryOptions options, IScope? scope = null, IRequestSpan? parentSpan = null)
+            => QueryAsync<T>(statement, options, false, scope, parentSpan);
+
+        internal async Task<IQueryResult<T>> QueryAsync<T>(string statement, TransactionQueryOptions options, bool txImplicit, IScope? scope = null, IRequestSpan? parentSpan = null)
         {
             var traceSpan = TraceSpan(parent: parentSpan);
             long fixmeStatementId = 0;
@@ -1428,7 +1487,8 @@ namespace Couchbase.Transactions
                 statement: statement,
                 options: options.Build(),
                 hookPoint: ITestHooks.HOOK_QUERY,
-                parentSpan: traceSpan.Item
+                parentSpan: traceSpan.Item,
+                txImplicit: txImplicit
                 );
 
             return results;
@@ -1466,7 +1526,8 @@ namespace Couchbase.Transactions
             IsDone = true;
 
             await SetAtrAborted(isAppRollback, traceSpan.Item).CAF();
-            foreach (var sm in _stagedMutations)
+            var allMutations = _stagedMutations.ToList();
+            foreach (var sm in allMutations)
             {
                 switch (sm.Type)
                 {
@@ -1862,6 +1923,11 @@ namespace Couchbase.Transactions
                 options = options.Raw("txdata", txdata);
             }
 
+            if (txImplicit)
+            {
+                options = options.Raw("tximplicit", true);
+            }
+
             options = options.Metrics(true);
             try
             {
@@ -2058,7 +2124,7 @@ namespace Couchbase.Transactions
             var state = new TxDataState((long)_overallContext.RemainingUntilExpiration.TotalMilliseconds);
             var txConfig = new TxDataReportedConfig((long?)_config?.KeyValueTimeout?.TotalMilliseconds ?? 10_000, AtrIds.NumAtrs, _effectiveDurabilityLevel.ToString().ToUpperInvariant());
 
-            var mutations = _stagedMutations?.ToArray().Select(sm => sm.AsTxData()) ?? Array.Empty<TxDataMutation>();
+            var mutations = _stagedMutations?.ToList().Select(sm => sm.AsTxData()) ?? Array.Empty<TxDataMutation>();
             var txdata = new QueryTxData(txid, state, txConfig, _atr?.AtrRef, mutations);
             var queryOptions = NonStreamingQuery()
                 .ScanConsistency(QueryScanConsistency.RequestPlus) // TODO: From mergedConfig
@@ -2070,9 +2136,7 @@ namespace Couchbase.Transactions
                     DurabilityLevel.PersistToMajority => "persistToMajority",
                     _ => _effectiveDurabilityLevel.ToString()
                 })
-                .Raw("txtimeout", $"{_overallContext.RemainingUntilExpiration.TotalMilliseconds}ms")
-                // TODO: EXT_CUSTOM_METADATA
-                .Raw("numatrs", AtrIds.NumAtrs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                .Raw("txtimeout", $"{_overallContext.RemainingUntilExpiration.TotalMilliseconds}ms");
 
             if (_overallContext.Config.MetadataCollection != null)
             {
@@ -2092,6 +2156,7 @@ namespace Couchbase.Transactions
                 parentSpan: traceSpan.Item
                 ).CAF();
 
+            // NOTE: the txid returned is the AttemptId, not the TransactionId.
             await foreach (var result in results)
             {
                 if (result.txid != AttemptId)
@@ -2107,7 +2172,10 @@ namespace Couchbase.Transactions
 
         internal void SaveErrorWrapper(TransactionOperationFailedException ex)
         {
-            _previousErrors.TryAdd(ex.ExceptionNumber, ex);
+            if (!_previousErrors.TryAdd(ex.ExceptionNumber, ex))
+            {
+                Logger.LogError("Could not add err {ex}", ex);
+            }
         }
 
         private enum RepeatAction
@@ -2180,9 +2248,9 @@ namespace Couchbase.Transactions
                 AttemptId: AttemptId,
                 AtrId: _atr.AtrId,
                 AtrCollection: _atr.Collection,
-                InsertedIds: StagedInserts.Select(sm => sm.AsDocRecord()).ToList(),
-                ReplacedIds: StagedReplaces.Select(sm => sm.AsDocRecord()).ToList(),
-                RemovedIds: StagedRemoves.Select(sm => sm.AsDocRecord()).ToList(),
+                InsertedIds: _stagedMutations.Inserts().Select(sm => sm.AsDocRecord()).ToList(),
+                ReplacedIds: _stagedMutations.Replaces().Select(sm => sm.AsDocRecord()).ToList(),
+                RemovedIds: _stagedMutations.Removes().Select(sm => sm.AsDocRecord()).ToList(),
                 State: _state,
                 WhenReadyToBeProcessed: DateTimeOffset.UtcNow, // EXT_REMOVE_COMPLETED
                 ProcessingErrors: new ConcurrentQueue<Exception>()

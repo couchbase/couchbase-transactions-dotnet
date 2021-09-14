@@ -26,7 +26,7 @@ namespace Couchbase.Transactions
         private bool? _readonly = null;
         private bool? _adhoc = null;
         private TimeSpan? _timeout = null;
-        private ITypeSerializer _serializer;
+        private ITypeSerializer? _serializer = null;
 
         private TransactionQueryOptions()
         {

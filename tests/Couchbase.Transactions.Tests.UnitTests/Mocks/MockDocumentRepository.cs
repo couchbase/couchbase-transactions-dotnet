@@ -76,6 +76,11 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
             return ((ulong)_rollingCas, new MutationToken("fake", 1, 2, _rollingCas));
         }
 
+        public Task<(ulong updatedCas, MutationToken mutationToken)> RemoveStagedInsert(TransactionGetResult doc)
+        {
+            throw new NotImplementedException();
+        }
+
         public async Task<(ulong updatedCas, MutationToken mutationToken)> UnstageInsertOrReplace(ICouchbaseCollection collection, string docId, ulong cas, object finalDoc, bool insertMode)
         {
             _ = await LookupDocumentAsync(collection, docId);

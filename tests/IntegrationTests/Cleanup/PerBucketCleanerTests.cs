@@ -38,6 +38,11 @@ namespace Couchbase.Transactions.Tests.IntegrationTests.Cleanup
                 perBucketCleaner = new PerBucketCleaner(clientUuid, cleaner, repo, TimeSpan.FromSeconds(0.1), loggerFactory);
                 await Task.Delay(500);
                 Assert.True(perBucketCleaner.Running);
+                for (var i = 0; i < 10 && perBucketCleaner.RunCount < 1; i++)
+                {
+                    await Task.Delay(500);
+                }
+
                 Assert.NotEqual(0, perBucketCleaner.RunCount);
             }
             finally

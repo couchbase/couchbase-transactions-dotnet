@@ -122,6 +122,9 @@ namespace Couchbase.Transactions.Internal.Test
         Task<int?> BeforeQuery(AttemptContext self, string statement) => Task.FromResult<int?>(0);
         Task<int?> AfterQuery(AttemptContext self, string statement) => Task.FromResult<int?>(0);
         Task<int?> BeforeOverwritingStagedInsertRemoval(AttemptContext self, string id) => Task.FromResult<int?>(0);
+
+        Task<int?> BeforeRemoveStagedInsert(AttemptContext self, string id) => Task.FromResult<int?>(0);
+        Task<int?> AfterRemoveStagedInsert(AttemptContext self, string id) => Task.FromResult<int?>(0);
     }
 
     /// <summary>

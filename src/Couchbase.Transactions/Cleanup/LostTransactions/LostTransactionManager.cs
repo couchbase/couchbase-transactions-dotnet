@@ -147,21 +147,34 @@ namespace Couchbase.Transactions.Cleanup.LostTransactions
                 Dictionary<string, Management.Buckets.BucketSettings> buckets;
                 try
                 {
-                    buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
+                    try
+                    {
+                        buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
+                    }
+                    catch (ArgumentNullException)
+                    {
+                        _logger.LogWarning("GetAllBuckets failed due to ArgumentNullException.  Cluster not ready?");
+                        await _cluster.WaitUntilReadyAsync(TimeSpan.FromSeconds(30)).CAF();
+                        _logger.LogInformation("Cluster ready.  Retrying GetAllBuckets...");
+                        buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
+                    }
+                    catch (NullReferenceException)
+                    {
+                        _logger.LogWarning("GetAllBuckets failed due to NullReferenceException.  Cluster not ready?");
+                        await _cluster.WaitUntilReadyAsync(TimeSpan.FromSeconds(30)).CAF();
+                        _logger.LogInformation("Cluster ready.  Retrying GetAllBuckets...");
+                        buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
+                    }
                 }
                 catch (ArgumentNullException)
                 {
-                    _logger.LogWarning("GetAllBuckets failed due to ArgumentNullException.  Cluster not ready?");
-                    await _cluster.WaitUntilReadyAsync(TimeSpan.FromSeconds(30)).CAF();
-                    _logger.LogInformation("Cluster ready.  Retrying GetAllBuckets...");
-                    buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
+                    _logger.LogWarning("GetAllBuckets failed due to Cluster still not ready");
+                    return;
                 }
                 catch (NullReferenceException)
                 {
-                    _logger.LogWarning("GetAllBuckets failed due to NullReferenceException.  Cluster not ready?");
-                    await _cluster.WaitUntilReadyAsync(TimeSpan.FromSeconds(30)).CAF();
-                    _logger.LogInformation("Cluster ready.  Retrying GetAllBuckets...");
-                    buckets = await _cluster.Buckets.GetAllBucketsAsync().CAF();
+                    _logger.LogWarning("GetAllBuckets failed due to Cluster still not ready");
+                    return;
                 }
 
                 foreach (var bkt in buckets)
