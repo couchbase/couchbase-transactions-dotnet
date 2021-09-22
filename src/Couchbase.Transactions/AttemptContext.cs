@@ -1774,6 +1774,10 @@ namespace Couchbase.Transactions
             // It takes a TransactionGetResult gr variable.
 
             using var traceSpan = TraceSpan(parent: parentSpan);
+
+            // If the transaction has expired, enter ExpiryOvertimeMode and raise Error(ec=FAIL_EXPIRY, raise=TRANSACTION_EXPIRED).
+            CheckExpiryAndThrow(gr.Id, ITestHooks.HOOK_CHECK_WRITE_WRITE_CONFLICT);
+
             var sw = Stopwatch.StartNew();
             await RepeatUntilSuccessOrThrow(async () =>
             {
@@ -1797,9 +1801,6 @@ namespace Couchbase.Transactions
                     // Else, if transaction A == transaction B, it’s fine to proceed
                     return RepeatAction.NoRepeat;
                 }
-
-                // If the transaction has expired, enter ExpiryOvertimeMode and raise Error(ec=FAIL_EXPIRY, raise=TRANSACTION_EXPIRED).
-                CheckExpiryAndThrow(gr.Id, ITestHooks.HOOK_CHECK_WRITE_WRITE_CONFLICT);
 
                 // Do a lookupIn call to fetch the ATR entry for B.
                 ICouchbaseCollection ? otherAtrCollection = null;
@@ -1842,20 +1843,14 @@ namespace Couchbase.Transactions
                     return RepeatAction.NoRepeat;
                 }
 
-                await ForwardCompatibility.Check(this, ForwardCompatibility.WriteWriteConflictReadingAtr, otherAtr.ForwardCompatibility).CAF();
+                Logger.LogDebug("[{attemptId}] OtherATR.TransactionId = {otherAtrId} in state {otherAtrState}", AttemptId, otherAtr.TransactionId, otherAtr.State);
 
-                if (otherAtr.IsExpired == true)
-                {
-                    var expiredAt = (otherAtr.TimestampStartMsecs!.Value.AddMilliseconds(otherAtr.ExpiresAfterMsecs!.Value));
-                    var utcNow = DateTimeOffset.UtcNow;
-                    var expiredMsecs = (utcNow - expiredAt).TotalMilliseconds;
-                    Logger.LogDebug("{method} found expired (@{expiredAt}, i.e. {expiredMsecs}ms ago) other ATR for {redactedId}, attempt={attemptId}",
-                        method, expiredAt, expiredMsecs, redactedId, AttemptId);
-                    return RepeatAction.NoRepeat;
-                }
+                await ForwardCompatibility.Check(this, ForwardCompatibility.WriteWriteConflictReadingAtr, otherAtr.ForwardCompatibility).CAF();
 
                 if (otherAtr.State == AttemptStates.COMPLETED || otherAtr.State == AttemptStates.ROLLED_BACK)
                 {
+                    Logger.LogInformation("[{attemptId}] ATR entry state of {attemptState} indicates we can proceed to overwrite", AttemptId, otherAtr.State);
+
                     // ok to proceed
                     Logger.LogDebug("{method} other ATR is {otherAtrState} for {redactedId}, attempt={attemptId}",
                         method, otherAtr.State, redactedId, AttemptId);
@@ -1874,6 +1869,10 @@ namespace Couchbase.Transactions
                     throw CreateError(this, ErrorClass.FailWriteWriteConflict)
                         .RetryTransaction()
                         .Build();
+                }
+                else
+                {
+                    Logger.LogDebug("{elapsed}ms elapsed in {method}", sw.Elapsed.TotalMilliseconds, nameof(CheckWriteWriteConflict));
                 }
 
                 return RepeatAction.RepeatWithBackoff;

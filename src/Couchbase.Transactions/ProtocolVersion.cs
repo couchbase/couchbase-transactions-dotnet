@@ -22,6 +22,7 @@ namespace Couchbase.Transactions
             yield return new ExtensionName("BfCbd3787", "BF_CBD_3787", "BF3787");
             yield return new ExtensionName("BfCbd3794", "BF_CBD_3794", "BF3794");
             yield return new ExtensionName("ExtAllKvCombinations", "EXT_ALL_KV_COMBINATIONS", "CO");
+            yield return new ExtensionName("BfCbd3791", "BF_CBD_3791", "BF3791");
             // TODO: BF-CBD-3705
             // TODO: BF-CBD-3838
             // TODO: ExtUnknownAtrStates
