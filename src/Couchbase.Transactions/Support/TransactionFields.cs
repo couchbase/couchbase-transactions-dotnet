@@ -26,6 +26,7 @@ namespace Couchbase.Transactions.Support
         public const string AtrFieldPerDocScope = "scp";
         public const string AtrFieldPerDocCollection = "col";
         public const string AtrFieldPendingSentinel = "p";
+        public const string AtrFieldDurability = "d";
 
         // Fields inside regular docs that are part of a transaction
         public const string TransactionInterfacePrefixOnly = "txn";

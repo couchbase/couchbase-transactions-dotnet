@@ -267,41 +267,6 @@ namespace Couchbase.Transactions.Error.Attempts
             return (ec, toThrow?.Build());
         }
 
-        internal (ErrorClass ec, TransactionOperationFailedException? toThrow) TriageSetAtrCommitErrors(Exception err)
-        {
-            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#SetATRCommit
-            var ec = err.Classify();
-            ErrorBuilder? toThrow = ec switch
-            {
-                FailExpiry => Error(ec, new AttemptExpiredException(_ctx, "Attempt Expired in SetATRCommit", err), raise: TransactionExpired),
-                // FailAmbiguous to be handled later in SetATRCommit Ambiguity Resolution
-                FailAmbiguous => null,
-                FailHard => Error(ec, err, rollback: false),
-                FailTransient => Error(ec, err, retry: true),
-                _ => Error(ec, err)
-            };
-
-            return (ec, toThrow?.Build());
-        }
-
-        internal (ErrorClass ec, TransactionOperationFailedException? toThrow) TriageSetAtrCommitAmbiguityErrors(Exception err)
-        {
-            // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#SetATRCommit-Ambiguity-Resolution
-            var ec = err.Classify();
-            ErrorBuilder? toThrow = ec switch
-            {
-                FailExpiry => Error(ec, new AttemptExpiredException(_ctx,
-                        "Attempt expired during SetAtrCommit ambiguity resolution.", err), rollback: false, raise: TransactionCommitAmbiguous),
-                FailHard => Error(ec, err, rollback: false),
-                // FailTransient, FailOther result in retry of SetAtrCommit Ambiguity Resolution
-                FailTransient => null,
-                FailOther => null,
-                _ => Error(ec, err, rollback: false)
-            };
-
-            return (ec, toThrow?.Build());
-        }
-
         public (ErrorClass ec, TransactionOperationFailedException? toThrow) TriageSetAtrAbortedErrors(Exception err)
         {
             // https://hackmd.io/Eaf20XhtRhi8aGEn_xIH8A#SetATRAborted

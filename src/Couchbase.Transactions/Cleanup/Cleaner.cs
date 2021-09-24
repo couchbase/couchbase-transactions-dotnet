@@ -85,7 +85,8 @@ namespace Couchbase.Transactions.Cleanup
             AttemptStates.COMMITTED => CleanupDocsCommitted(cleanupRequest),
             AttemptStates.COMPLETED => NothingToDo,
             AttemptStates.ROLLED_BACK => NothingToDo,
-            _ => throw new NotImplementedException(cleanupRequest.State + " Attempt cannot be cleaned up")
+            AttemptStates.UNKNOWN => NothingToDo,
+            _ => NothingToDo, // ExtUnknownATRStates
         };
 
         private async Task CleanupAtrEntry(CleanupRequest cleanupRequest)
@@ -107,7 +108,8 @@ namespace Couchbase.Transactions.Cleanup
                 specs.Add(MutateInSpec.Remove(prefix, isXattr: true));
 
                 var mutateResult = await cleanupRequest.AtrCollection.MutateInAsync(cleanupRequest.AtrId, specs,
-                    opts => opts.Timeout(_keyValueTimeout));
+                    opts => opts.Timeout(_keyValueTimeout)
+                                .Durability(cleanupRequest.GetDurabilityLevel()));
 
                 if (mutateResult?.MutationToken.SequenceNumber != 0)
                 {
@@ -149,12 +151,14 @@ namespace Couchbase.Transactions.Cleanup
                             await collection.MutateInAsync(dr.Id, specs =>
                                     specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true),
                                 opts => opts.Cas(op.Cas)
+                                    .Durability(cleanupRequest.GetDurabilityLevel())
                                     .AccessDeleted(true)
                                     .Timeout(_keyValueTimeout));
                         }
                         else
                         {
                             await collection.RemoveAsync(dr.Id, opts => opts.Cas(op.Cas)
+                                .Durability(cleanupRequest.GetDurabilityLevel())
                                 .Timeout(_keyValueTimeout)).CAF();
                         }
                     }).CAF();
@@ -181,6 +185,7 @@ namespace Couchbase.Transactions.Cleanup
         {
             using var logScope = _logger.BeginMethodScope();
             var insertedOrReplaced = cleanupRequest.InsertedIds.Concat(cleanupRequest.ReplacedIds);
+            var durabilityLevel = cleanupRequest.GetDurabilityLevel();
             foreach (var dr in insertedOrReplaced)
             {
                 await CleanupDoc(dr, requireCrc32ToMatchStaging: true, attemptId: cleanupRequest.AttemptId,
@@ -192,7 +197,7 @@ namespace Couchbase.Transactions.Cleanup
                         var finalDoc = op.StagedContent!.ContentAs<object>();
                         if (op.IsDeleted)
                         {
-                            await collection.InsertAsync(dr.Id, finalDoc).CAF();
+                            await collection.InsertAsync(dr.Id, finalDoc, opts => opts.Durability(durabilityLevel)).CAF();
                         }
                         else
                         {
@@ -200,8 +205,7 @@ namespace Couchbase.Transactions.Cleanup
                                     specs.Remove(TransactionFields.TransactionInterfacePrefixOnly, isXattr: true)
                                         .SetDoc(finalDoc)
                                 , opts => opts.Cas(op.Cas)
-                                    ////.AccessDeleted(true)
-                                    // TODO: Durability level
+                                    .Durability(durabilityLevel)
                                     .Timeout(_keyValueTimeout)).CAF();
                         }
                     }).CAF();
@@ -216,6 +220,7 @@ namespace Couchbase.Transactions.Cleanup
                         var collection = await dr.GetCollection(_cluster).CAF();
 
                         await collection.RemoveAsync(dr.Id, opts => opts.Cas(op.Cas)
+                            .Durability(durabilityLevel)
                             .Timeout(_keyValueTimeout)).CAF();
                     }).CAF();
             }

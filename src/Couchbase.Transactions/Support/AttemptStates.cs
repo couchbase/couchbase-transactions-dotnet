@@ -19,7 +19,9 @@ namespace Couchbase.Transactions.Support
 
         COMPLETED = 4,
 
-        ROLLED_BACK = 5
+        ROLLED_BACK = 5,
+
+        UNKNOWN = 6,
     }
 }
 

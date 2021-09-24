@@ -38,7 +38,7 @@ namespace Couchbase.Transactions.DataAccess
 
         Task MutateAtrComplete();
 
-        Task MutateAtrPending(ulong exp);
+        Task MutateAtrPending(ulong exp, DurabilityLevel documentDurability);
 
         Task MutateAtrCommit(IEnumerable<StagedMutation> stagedMutations);
 

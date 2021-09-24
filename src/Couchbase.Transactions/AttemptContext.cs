@@ -242,95 +242,94 @@ namespace Couchbase.Transactions
         private async Task<TransactionGetResult?> GetWithMav(ICouchbaseCollection collection, string id, string? resolveMissingAtrEntry = null, IRequestSpan? parentSpan = null)
         {
             using var traceSpan = TraceSpan(parent: parentSpan);
+
+            // we need to resolve the state of that transaction. Here is where we do the “Monotonic Atomic View” (MAV) logic
             try
             {
-                // we need to resolve the state of that transaction. Here is where we do the “Monotonic Atomic View” (MAV) logic
-                try
+                // Do a Sub-Document lookup, getting all transactional metadata, the “$document” virtual xattr,
+                // and the document’s body. Timeout is set as in Timeouts.
+                var docLookupResult = await _docs.LookupDocumentAsync(collection, id, fullDocument: true).CAF();
+                Logger.LogDebug("{method} for {redactedId}, attemptId={attemptId}, postCas={postCas}", nameof(GetWithMav), Redactor.UserData(id), AttemptId, docLookupResult.Cas);
+                if (docLookupResult == null)
                 {
-                    // Do a Sub-Document lookup, getting all transactional metadata, the “$document” virtual xattr,
-                    // and the document’s body. Timeout is set as in Timeouts.
-                    var docLookupResult = await _docs.LookupDocumentAsync(collection, id, fullDocument: true).CAF();
-                    Logger.LogDebug("{method} for {redactedId}, attemptId={attemptId}, postCas={postCas}", nameof(GetWithMav), Redactor.UserData(id), AttemptId, docLookupResult.Cas);
-                    if (docLookupResult == null)
+                    return TransactionGetResult.Empty;
+                }
+
+                var txn = docLookupResult?.TransactionXattrs;
+                if (txn?.Id?.AttemptId == null
+                    || txn?.Id?.Transactionid == null
+                    || txn?.AtrRef?.BucketName == null
+                    || txn?.AtrRef?.CollectionName == null)
+                {
+                    // Not in a transaction, or insufficient transaction metadata
+                    return docLookupResult!.IsDeleted
+                        ? TransactionGetResult.Empty
+                        : docLookupResult.GetPreTransactionResult();
+                }
+
+                if (resolveMissingAtrEntry == txn.Id?.AttemptId)
+                {
+                    // This is our second attempt getting the document, and it’s in the same state as before
+                    return docLookupResult!.IsDeleted
+                        ? TransactionGetResult.Empty
+                        : docLookupResult.GetPostTransactionResult();
+                }
+
+                resolveMissingAtrEntry = txn.Id?.AttemptId;
+
+                // TODO: double-check if atr attemptid == this attempt id, and return post-transaction version
+                // (should have been covered by staged mutation check)
+
+                var getCollectionTask = _atr?.GetAtrCollection(txn.AtrRef)
+                                        ?? AtrRepository.GetAtrCollection(txn.AtrRef, collection);
+                var docAtrCollection = await getCollectionTask.CAF()
+                                        ?? throw new ActiveTransactionRecordNotFoundException();
+
+                var findEntryTask = _atr?.FindEntryForTransaction(docAtrCollection, txn.AtrRef.Id!, txn.Id!.AttemptId)
+                    ?? AtrRepository.FindEntryForTransaction(docAtrCollection, txn.AtrRef.Id!, txn.Id!.AttemptId, _config.KeyValueTimeout);
+                var atrEntry = await findEntryTask.CAF()
+                                ?? throw new ActiveTransactionRecordEntryNotFoundException();
+
+                if (txn.Id!.AttemptId == AttemptId)
+                {
+                    if (txn.Operation?.Type == "remove")
                     {
                         return TransactionGetResult.Empty;
                     }
-
-                    var txn = docLookupResult?.TransactionXattrs;
-                    if (txn?.Id?.AttemptId == null
-                        || txn?.Id?.Transactionid == null
-                        || txn?.AtrRef?.BucketName == null
-                        || txn?.AtrRef?.CollectionName == null)
+                    else
                     {
-                        // Not in a transaction, or insufficient transaction metadata
-                        return docLookupResult!.IsDeleted
-                            ? TransactionGetResult.Empty
-                            : docLookupResult.GetPreTransactionResult();
-                    }
-
-                    if (resolveMissingAtrEntry == txn.Id?.AttemptId)
-                    {
-                        // This is our second attempt getting the document, and it’s in the same state as before
-                        return docLookupResult!.IsDeleted
-                            ? TransactionGetResult.Empty
-                            : docLookupResult.GetPostTransactionResult();
-                    }
-
-                    resolveMissingAtrEntry = txn.Id?.AttemptId;
-
-                    // TODO: double-check if atr attemptid == this attempt id, and return post-transaction version
-                    // (should have been covered by staged mutation check)
-
-                    var getCollectionTask = _atr?.GetAtrCollection(txn.AtrRef)
-                                            ?? AtrRepository.GetAtrCollection(txn.AtrRef, collection);
-                    var docAtrCollection = await getCollectionTask.CAF()
-                                           ?? throw new ActiveTransactionRecordNotFoundException();
-
-                    var findEntryTask = _atr?.FindEntryForTransaction(docAtrCollection, txn.AtrRef.Id!, txn.Id!.AttemptId)
-                        ?? AtrRepository.FindEntryForTransaction(docAtrCollection, txn.AtrRef.Id!, txn.Id!.AttemptId, _config.KeyValueTimeout);
-                    var atrEntry = await findEntryTask.CAF()
-                                   ?? throw new ActiveTransactionRecordEntryNotFoundException();
-
-                    if (txn.Id!.AttemptId == AttemptId)
-                    {
-                        if (txn.Operation?.Type == "remove")
-                        {
-                            return TransactionGetResult.Empty;
-                        }
-                        else
-                        {
-                            return docLookupResult!.GetPostTransactionResult();
-                        }
-                    }
-
-                    await ForwardCompatibility.Check(this, ForwardCompatibility.GetsReadingAtr, atrEntry.ForwardCompatibility);
-
-                    if (atrEntry.State == AttemptStates.COMMITTED || atrEntry.State == AttemptStates.COMPLETED)
-                    {
-                        if (txn.Operation?.Type == "remove")
-                        {
-                            return TransactionGetResult.Empty;
-                        }
-
                         return docLookupResult!.GetPostTransactionResult();
                     }
+                }
 
-                    if (docLookupResult!.IsDeleted || txn.Operation?.Type == "insert")
+                await ForwardCompatibility.Check(this, ForwardCompatibility.GetsReadingAtr, atrEntry.ForwardCompatibility);
+
+                if (atrEntry.State == AttemptStates.COMMITTED || atrEntry.State == AttemptStates.COMPLETED)
+                {
+                    if (txn.Operation?.Type == "remove")
                     {
                         return TransactionGetResult.Empty;
                     }
 
-                    return docLookupResult.GetPreTransactionResult();
+                    return docLookupResult!.GetPostTransactionResult();
                 }
-                catch (ActiveTransactionRecordEntryNotFoundException)
+
+                if (docLookupResult!.IsDeleted || txn.Operation?.Type == "insert")
+                {
+                    return TransactionGetResult.Empty;
+                }
+
+                return docLookupResult.GetPreTransactionResult();
+            }
+            catch (ActiveTransactionRecordNotFoundException ex)
+            {
+                Logger.LogWarning("ATR not found: {ex}", ex);
+                if (resolveMissingAtrEntry == null)
                 {
                     throw;
                 }
-                catch (Exception atrLookupException)
-                {
-                    var atrLookupTriage = _triage.TriageAtrLookupInMavErrors(atrLookupException);
-                    throw _triage.AssertNotNull(atrLookupTriage, atrLookupException);
-                }
+
+                return await GetWithMav(collection, id, resolveMissingAtrEntry).CAF();
             }
             catch (ActiveTransactionRecordEntryNotFoundException ex)
             {
@@ -341,6 +340,11 @@ namespace Couchbase.Transactions
                 }
 
                 return await GetWithMav(collection, id, resolveMissingAtrEntry).CAF();
+            }
+            catch (Exception atrLookupException)
+            {
+                var atrLookupTriage = _triage.TriageAtrLookupInMavErrors(atrLookupException);
+                throw _triage.AssertNotNull(atrLookupTriage, atrLookupException);
             }
         }
 
@@ -771,6 +775,7 @@ namespace Couchbase.Transactions
                 {
                     try
                     {
+                        var docDurability = _overallContext.PerConfig?.DurabilityLevel ?? _overallContext.Config.DurabilityLevel;
                         ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ATR_PENDING);
                         await _testHooks.BeforeAtrPending(this);
                         var t1 = _overallContext.StartTime;
@@ -779,7 +784,7 @@ namespace Couchbase.Transactions
                         var tc = _config.ExpirationTime;
                         var tRemaining = tc - tElapsed;
                         var exp = (ulong)Math.Max(Math.Min(tRemaining.TotalMilliseconds, tc.TotalMilliseconds), 0);
-                        await _atr.MutateAtrPending(exp);
+                        await _atr.MutateAtrPending(exp, docDurability);
                         Logger?.LogDebug($"{nameof(SetAtrPending)} for {Redactor.UserData(_atr.FullPath)} (attempt={AttemptId})");
                         await _testHooks.AfterAtrPending(this);
                         _state = AttemptStates.PENDING;
@@ -1271,10 +1276,15 @@ namespace Couchbase.Transactions
         private async Task SetAtrCommit(IRequestSpan? parentSpan)
         {
             _ = _atr ?? throw new InvalidOperationException($"{nameof(SetAtrCommit)} without initializing ATR.");
-
+            var ambiguityResolutionMode = false;
             using var traceSpan = TraceSpan(parent: parentSpan);
             await RepeatUntilSuccessOrThrow(async () =>
             {
+                if (ambiguityResolutionMode)
+                {
+                    Logger.LogDebug("Retrying SetAtrCommit with ambiguity resolution");
+                }
+
                 try
                 {
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ATR_COMMIT);
@@ -1285,23 +1295,85 @@ namespace Couchbase.Transactions
                     _state = AttemptStates.COMMITTED;
                     return RepeatAction.NoRepeat;
                 }
-                catch (Exception ex)
+                catch (Exception err)
                 {
-                    var triaged = _triage.TriageSetAtrCommitErrors(ex);
-                    if (triaged.ec == ErrorClass.FailExpiry)
+                    var ec = err.Classify();
+                    Logger.LogWarning("Failed attempt at committing due to {ec}", ec);
+                    if (ec == ErrorClass.FailExpiry)
                     {
-                        _expirationOvertimeMode = true;
-                    }
-                    else if (triaged.ec == ErrorClass.FailAmbiguous)
-                    {
-                        return await RepeatUntilSuccessOrThrow<RepeatAction>(async () =>
+                        if (ambiguityResolutionMode)
                         {
-                            var topRetry = await ResolveSetAtrCommitAmbiguity(traceSpan.Item).CAF();
-                            return (RepeatAction.NoRepeat, topRetry);
-                        });
+                            throw Error(ec, new AttemptExpiredException(this, "Attempt expired ambiguously in " + nameof(SetAtrCommit)), rollback: false, raise: TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous);
+                        }
+                        else
+                        {
+                            throw Error(ec, new AttemptExpiredException(this, "Attempt expired in " + nameof(SetAtrCommit)), rollback: false, raise: TransactionOperationFailedException.FinalError.TransactionExpired);
+                        }
+                    }
+                    else if (ec == ErrorClass.FailAmbiguous)
+                    {
+                        ambiguityResolutionMode = true;
+                        return RepeatAction.RepeatWithDelay;
+                    }
+                    else if (ec == ErrorClass.FailHard)
+                    {
+                        if (ambiguityResolutionMode)
+                        {
+                            throw Error(ec, err, rollback: false, raise: TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous);
+                        }
+
+                        throw Error(ec, err, rollback: false);
+                    }
+                    else if (ec == ErrorClass.FailTransient)
+                    {
+                        if (ambiguityResolutionMode)
+                        {
+                            // We haven't yet reached clarity on what state this attempt is in, so we can’t rollback or continue.
+                            return RepeatAction.RepeatWithDelay;
+                        }
+
+                        throw Error(ec, err, retry: true);
+                    }
+                    else if (ec == ErrorClass.FailPathAlreadyExists)
+                    {
+                        var repeatAction = await ResolveSetAtrCommitAmbiguity(traceSpan.Item).CAF();
+                        if (repeatAction != RepeatAction.NoRepeat)
+                        {
+                            ambiguityResolutionMode = false;
+                        }
+
+                        return repeatAction;
+                    }
+                    else
+                    {
+                        var cause = err;
+                        var rollback = true;
+                        if (ec == ErrorClass.FailDocNotFound)
+                        {
+                            cause = new ActiveTransactionRecordNotFoundException();
+                            rollback = false;
+                        }
+                        else if (ec == ErrorClass.FailPathNotFound)
+                        {
+                            cause = new ActiveTransactionRecordEntryNotFoundException();
+                            rollback = false;
+                        }
+                        else if (ec == ErrorClass.FailAtrFull)
+                        {
+                            cause = new ActiveTransactionRecordsFullException(this, "Full ATR in SetAtrCommit");
+                            rollback = false;
+                        }
+
+                        if (ambiguityResolutionMode == true)
+                        {
+                            // we were unable to attain clarity
+                            throw Error(ec, cause, rollback: false, raise: TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous);
+                        }
+
+                        throw Error(ec, cause, rollback: rollback);
                     }
 
-                    throw _triage.AssertNotNull(triaged, ex);
+                    throw Error(ec, err);
                 }
             }).CAF();
         }
@@ -1311,63 +1383,62 @@ namespace Couchbase.Transactions
             using var traceSpan = TraceSpan(parent: parentSpan);
             var setAtrCommitRetryAction = await RepeatUntilSuccessOrThrow<RepeatAction>(async () =>
             {
+                string? refreshedStatus = null;
                 try
                 {
                     ErrorIfExpiredAndNotInExpiryOvertimeMode(ITestHooks.HOOK_ATR_COMMIT_AMBIGUITY_RESOLUTION);
                     await _testHooks.BeforeAtrCommitAmbiguityResolution(this).CAF();
-                    var refreshedStatus = await _atr!.LookupAtrState().CAF();
-                    if (!Enum.TryParse<AttemptStates>(refreshedStatus, out var parsedRefreshStatus))
-                    {
-                        throw CreateError(this, ErrorClass.FailOther)
-                            .Cause(new InvalidOperationException(
-                                $"ATR state '{refreshedStatus}' could not be parsed"))
-                            .DoNotRollbackAttempt()
-                            .Build();
-                    }
-
-                    Logger.LogDebug("Atr State = {atrState}", parsedRefreshStatus);
-
-                    switch (parsedRefreshStatus)
-                    {
-                        case AttemptStates.COMMITTED:
-                            // The ambiguous operation actually succeeded. Return success.
-                            return (retry: RepeatAction.NoRepeat, finalVal: RepeatAction.NoRepeat);
-                        case AttemptStates.PENDING:
-                            // The ambiguous operation did not succeed. Restart from the top of SetATRCommit.
-                            return (retry: RepeatAction.NoRepeat, RepeatAction.RepeatWithDelay);
-                        case AttemptStates.ABORTED:
-                        case AttemptStates.ROLLED_BACK:
-                            // Another actor has aborted this transaction under us.
-                            // Raise an Error(ec = FAIL_OTHER, rollback=false, cause=TransactionAbortedExternally)
-                            throw CreateError(this, ErrorClass.FailOther)
-                                .Cause(new TransactionAbortedExternallyException())
-                                .DoNotRollbackAttempt()
-                                .Build();
-                        default:
-                            // Unknown status, perhaps from a future protocol or extension.
-                            // Bailout and leave the transaction for cleanup by raising
-                            // Error(ec = FAIL_OTHER, rollback=false, cause=IllegalStateException
-                            throw CreateError(this, ErrorClass.FailOther)
-                                .Cause(new InvalidOperationException("Unknown state in ambiguity resolution."))
-                                .DoNotRollbackAttempt()
-                                .Build();
-                    }
+                    refreshedStatus = await _atr!.LookupAtrState().CAF();
+                    
                 }
                 catch (Exception exAmbiguity)
                 {
-                    var triagedAmbiguity = _triage.TriageSetAtrCommitAmbiguityErrors(exAmbiguity);
-                    switch (triagedAmbiguity.ec)
+                    var ec = exAmbiguity.Classify();
+                    switch (ec)
                     {
                         case ErrorClass.FailExpiry:
-                            _expirationOvertimeMode = true;
-                            goto default;
+                            throw Error(ec, new AttemptExpiredException(this, "expired resolving commit ambiguity", exAmbiguity), rollback: false, raise: TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous);
+                        case ErrorClass.FailHard:
+                            throw Error(ec, exAmbiguity, rollback: false, raise: TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous);
                         case ErrorClass.FailTransient:
                         case ErrorClass.FailOther:
-                            // We can’t proceed until we’re resolved the ambiguity or expired, so retry from the top of this section, after waiting OpRetryDelay.
-                            return (RepeatAction.RepeatWithDelay, RepeatAction.RepeatWithDelay);
+                            return (retry: RepeatAction.RepeatWithDelay, finalVal: RepeatAction.RepeatWithDelay);
                         default:
-                            throw _triage.AssertNotNull(triagedAmbiguity, exAmbiguity);
+                            var cause = exAmbiguity;
+                            if (ec == ErrorClass.FailDocNotFound)
+                            {
+                                cause = new ActiveTransactionRecordNotFoundException();
+                            }
+                            else if (ec == ErrorClass.FailPathNotFound)
+                            {
+                                cause = new ActiveTransactionRecordEntryNotFoundException();
+                            }
+
+                            throw Error(ec, cause, rollback: false, raise: TransactionOperationFailedException.FinalError.TransactionCommitAmbiguous);
                     }
+                }
+
+                if (!Enum.TryParse<AttemptStates>(refreshedStatus, out var parsedRefreshStatus))
+                {
+                    throw CreateError(this, ErrorClass.FailOther)
+                        .Cause(new InvalidOperationException(
+                            $"ATR state '{refreshedStatus}' could not be parsed"))
+                        .DoNotRollbackAttempt()
+                        .Build();
+                }
+
+                switch (parsedRefreshStatus)
+                {
+                    case AttemptStates.COMMITTED:
+                        // The ambiguous operation actually succeeded. Return success.
+                        return (retry: RepeatAction.NoRepeat, finalVal: RepeatAction.NoRepeat);
+                    case AttemptStates.ABORTED:
+                        throw CreateError(this, ErrorClass.FailOther).RetryTransaction().Build();
+                    default:
+                        // Unknown status, perhaps from a future protocol or extension.
+                        // Bailout and leave the transaction for cleanup by raising
+                        // Error(ec = FAIL_OTHER, rollback=false, cause=IllegalStateException
+                        throw Error(ErrorClass.FailOther, new InvalidOperationException("Unknown ATR state: " + refreshedStatus), rollback: false);
                 }
             });
 
@@ -2243,6 +2314,7 @@ namespace Couchbase.Transactions
                 return null;
             }
 
+            var durabilityShort = new ShortStringDurabilityLevel(_overallContext.PerConfig.DurabilityLevel ?? _overallContext.Config.DurabilityLevel).ToString();
             var cleanupRequest = new CleanupRequest(
                 AttemptId: AttemptId,
                 AtrId: _atr.AtrId,
@@ -2252,8 +2324,10 @@ namespace Couchbase.Transactions
                 RemovedIds: _stagedMutations.Removes().Select(sm => sm.AsDocRecord()).ToList(),
                 State: _state,
                 WhenReadyToBeProcessed: DateTimeOffset.UtcNow, // EXT_REMOVE_COMPLETED
-                ProcessingErrors: new ConcurrentQueue<Exception>()
-            );
+                ProcessingErrors: new ConcurrentQueue<Exception>(),
+                DurabilityLevel: durabilityShort
+            )
+            ;
 
             Logger.LogInformation("Adding collection for {col}/{atr} to run at {when}", Redactor.UserData(cleanupRequest.AtrCollection.Name), cleanupRequest.AtrId, cleanupRequest.WhenReadyToBeProcessed);
             return cleanupRequest;
@@ -2261,6 +2335,28 @@ namespace Couchbase.Transactions
 
         private DelegatingDisposable<IRequestSpan> TraceSpan([CallerMemberName] string method = "RootSpan", IRequestSpan? parent = null)
             => new DelegatingDisposable<IRequestSpan>(_requestTracer.RequestSpan(method, parent), Logger.BeginMethodScope(method));
+
+        private Exception Error(ErrorClass ec, Exception err, bool? retry = null, bool? rollback = null, TransactionOperationFailedException.FinalError? raise = null)
+        {
+            var eb = CreateError(this, ec, err);
+            if (retry.HasValue && retry.Value)
+            {
+                eb.RetryTransaction();
+            }
+
+            if (rollback.HasValue && rollback.Value == false)
+            {
+                eb.DoNotRollbackAttempt();
+            }
+
+            if (raise.HasValue)
+            {
+                eb.RaiseException(raise.Value);
+            }
+
+            return eb.Build();
+        }
+
     }
 }
 

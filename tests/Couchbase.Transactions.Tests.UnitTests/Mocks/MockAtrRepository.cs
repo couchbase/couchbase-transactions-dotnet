@@ -57,11 +57,12 @@ namespace Couchbase.Transactions.Tests.UnitTests.Mocks
 
         public Task MutateAtrComplete() => UpdateStateOrThrow(Support.AttemptStates.COMPLETED);
 
-        public Task MutateAtrPending(ulong exp)
+        public Task MutateAtrPending(ulong exp, DurabilityLevel durabilityLevel)
         {
             var atrEntry = new AtrEntry()
             {
                 State = Support.AttemptStates.PENDING,
+                DurabilityLevel = new ShortStringDurabilityLevel(durabilityLevel).ToString()
             };
 
             Atrs[FullId] = atrEntry;

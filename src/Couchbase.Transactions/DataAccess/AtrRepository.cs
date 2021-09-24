@@ -33,6 +33,7 @@ namespace Couchbase.Transactions.DataAccess
         private readonly string _prefixedAtrFieldTimestampRollbackComplete;
         private readonly string _prefixedAtrFieldTimestampRollbackStart;
         private readonly string _prefixedAtrFieldTransactionId;
+        private readonly string _prefixedAtrFieldDurability;
         private readonly DurabilityLevel? _atrDurability;
         private readonly ILogger _logger;
 
@@ -62,6 +63,7 @@ namespace Couchbase.Transactions.DataAccess
             _prefixedAtrFieldTimestampRollbackComplete = $"{_atrRoot}.{TransactionFields.AtrFieldTimestampRollbackComplete}";
             _prefixedAtrFieldTimestampRollbackStart = $"{_atrRoot}.{TransactionFields.AtrFieldTimestampRollbackStart}";
             _prefixedAtrFieldTransactionId = $"{_atrRoot}.{TransactionFields.AtrFieldTransactionId}";
+            _prefixedAtrFieldDurability = $"{_atrRoot}.{TransactionFields.AtrFieldDurability}";
             _logger = loggerFactory.CreateLogger<AtrRepository>();
             _logger.LogDebug("Requested Durability = {durability}", atrDurability);
             _atrDurability = atrDurability ?? DurabilityLevel.Majority;
@@ -143,9 +145,10 @@ namespace Couchbase.Transactions.DataAccess
             _logger.LogInformation("Removed ATR {atr}/{atrRoot} on {atrCollection} ", AtrId, _atrRoot, Collection.MakeKeyspace());
         }
 
-        public async Task MutateAtrPending(ulong exp)
+        public async Task MutateAtrPending(ulong exp, DurabilityLevel documentDurability)
         {
             using var logScope = _logger.BeginMethodScope();
+            var shortDurability = new ShortStringDurabilityLevel(documentDurability).ToString();
             var specs = new[]
             {
                 MutateInSpec.Insert(_prefixedAtrFieldTransactionId,
@@ -155,6 +158,7 @@ namespace Couchbase.Transactions.DataAccess
                 MutateInSpec.Insert(_prefixedAtrFieldStartTimestamp, MutationMacro.Cas),
                 MutateInSpec.Insert(_prefixedAtrFieldExpiresAfterMsecs, exp,
                             createPath: false, isXattr: true),
+                MutateInSpec.Insert(_prefixedAtrFieldDurability, shortDurability, isXattr: true),
                 MutateInSpec.SetDoc(new byte?[] { null }), // ExtBinaryMetadata
             };
 
@@ -178,7 +182,7 @@ namespace Couchbase.Transactions.DataAccess
                     isXattr: true),
                 MutateInSpec.Upsert(_prefixedAtrFieldDocsRemoved, removes,
                     isXattr: true),
-                MutateInSpec.Upsert(_prefixedAtrFieldsPendingSentinel, 0,
+                MutateInSpec.Insert(_prefixedAtrFieldsPendingSentinel, 0,
                     isXattr: true)
             };
 

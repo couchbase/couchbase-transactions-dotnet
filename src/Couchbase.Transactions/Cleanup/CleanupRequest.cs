@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text;
 using Couchbase.KeyValue;
 using Couchbase.Transactions.Components;
+using Couchbase.Transactions.DataModel;
 using Couchbase.Transactions.Support;
 using Newtonsoft.Json.Linq;
 
@@ -19,7 +20,12 @@ namespace Couchbase.Transactions.Cleanup
             AttemptStates State,
             DateTimeOffset WhenReadyToBeProcessed,
             ConcurrentQueue<Exception> ProcessingErrors,
-            JObject? ForwardCompatibility = null);
+            JObject? ForwardCompatibility = null,
+            string? DurabilityLevel = null)
+    {
+        public Couchbase.KeyValue.DurabilityLevel GetDurabilityLevel() =>
+           ShortStringDurabilityLevel.FromString(this.DurabilityLevel)?.Value ?? Couchbase.KeyValue.DurabilityLevel.Majority;
+    }
 }
 
 

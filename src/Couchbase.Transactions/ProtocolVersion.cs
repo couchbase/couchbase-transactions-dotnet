@@ -7,7 +7,7 @@ namespace Couchbase.Transactions
 {
     internal static class ProtocolVersion
     {
-        public static readonly decimal SupportedVersion = 2.0m;
+        public static readonly decimal SupportedVersion = 2.1m;
 
         public static IEnumerable<ExtensionName> ExtensionsSupported()
         {
@@ -23,10 +23,10 @@ namespace Couchbase.Transactions
             yield return new ExtensionName("BfCbd3794", "BF_CBD_3794", "BF3794");
             yield return new ExtensionName("ExtAllKvCombinations", "EXT_ALL_KV_COMBINATIONS", "CO");
             yield return new ExtensionName("BfCbd3791", "BF_CBD_3791", "BF3791");
-            // TODO: BF-CBD-3705
-            // TODO: BF-CBD-3838
-            // TODO: ExtUnknownAtrStates
-            // TODO: BF-CBD-3791
+            yield return new ExtensionName("ExtStoreDurability", "EXT_STORE_DURABILITY", "SD");
+            yield return new ExtensionName("BfCbd3705", "BF_CBD_3705", "BF3705");
+            yield return new ExtensionName("BfCbd3838", "BF_CBD_33838", "BF3838");
+            yield return new ExtensionName("ExtUnknownATRStates", "EXT_UNKNOWN_ATR_STATES", "UA");
         }
 
         internal static bool Supported(string shortCode) => SupportedShortCodes.Value.Contains(shortCode);

@@ -62,6 +62,9 @@ namespace Couchbase.Transactions.Components
         [JsonProperty("fc")]
         public JObject? ForwardCompatibility { get; set; } = null;
 
+        [JsonProperty("d")]
+        public string? DurabilityLevel { get; set; } = null;
+
         public ulong? Cas { get; }
 
         public bool? IsExpired
