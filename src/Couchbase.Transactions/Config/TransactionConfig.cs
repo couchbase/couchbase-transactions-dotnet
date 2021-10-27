@@ -104,7 +104,33 @@ namespace Couchbase.Transactions.Config
             KeyValueTimeout = keyValueTimeout;
             DurabilityLevel = durabilityLevel;
         }
+
+        // Configs should probably be immutable by default to avoid this problem, but changing TransactionConfig to being immutable
+        // would be a breaking change.
+        // Using named parameters style here helps to use the compiler to ensure that any new properties are not missed.
+        internal TransactionConfigImmutable AsImmutable() => new(
+            ExpirationTime: ExpirationTime,
+            CleanupLostAttempts: CleanupLostAttempts,
+            CleanupClientAttempts: CleanupClientAttempts,
+            CleanupWindow: CleanupWindow,
+            KeyValueTimeout: KeyValueTimeout,
+            DurabilityLevel: DurabilityLevel,
+            LoggerFactory: LoggerFactory,
+            MetadataCollection: MetadataCollection);
     }
+
+    /// <summary>
+    /// An immutable version of <see cref="TransactionConfig"/>, to prevent bugs from user changing config in the middle of a transactions.
+    /// </summary>
+    internal record TransactionConfigImmutable(
+        TimeSpan ExpirationTime,
+        bool CleanupLostAttempts,
+        bool CleanupClientAttempts,
+        TimeSpan CleanupWindow,
+        TimeSpan? KeyValueTimeout,
+        DurabilityLevel DurabilityLevel,
+        ILoggerFactory? LoggerFactory,
+        ICouchbaseCollection? MetadataCollection);
 }
 
 

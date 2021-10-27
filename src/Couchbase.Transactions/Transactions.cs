@@ -7,6 +7,7 @@ using Couchbase.Core.Diagnostics.Tracing;
 using Couchbase.Core.Logging;
 using Couchbase.Core.Retry;
 using Couchbase.KeyValue;
+using Couchbase.Query;
 using Couchbase.Transactions.Cleanup;
 using Couchbase.Transactions.Cleanup.LostTransactions;
 using Couchbase.Transactions.Config;
@@ -148,8 +149,8 @@ namespace Couchbase.Transactions
             var overallContext = new TransactionContext(
                 transactionId: txId,
                 startTime: DateTimeOffset.UtcNow,
-                config: Config,
-                perConfig: perConfig
+                config: Config.AsImmutable(),
+                perConfig: perConfig.AsImmutable()
                 );
 
             var result = new TransactionResult() { TransactionId =  overallContext.TransactionId };
@@ -216,17 +217,35 @@ namespace Couchbase.Transactions
             throw new InvalidOperationException("Loop should not have exited without expiration.");
         }
 
-        public async Task QueryAsync(string statement, TransactionQueryOptions? options = null, IScope? scope = null)
+        /// <summary>
+        /// Run a single query as a transaction.
+        /// </summary>
+        /// <typeparam name="T">The type of the result.  Use <see cref="object"/> for queries with no results.</typeparam>
+        /// <param name="statement">The statement to execute.</param>
+        /// <param name="config">The configuration to use for this transaction.</param>
+        /// <param name="scope">The scope</param>
+        /// <returns>A <see cref="SingleQueryTransactionResult{T}"/> with the query results, if any.</returns>
+        public async Task<SingleQueryTransactionResult<T>> QueryAsync<T>(string statement, SingleQueryTransactionConfigBuilder? config = null, IScope? scope = null)
         {
             using var rootSpan = _requestTracer.RequestSpan(nameof(QueryAsync))
                 .SetAttribute("db.couchbase.transactions.tximplicit", true);
 
-            options ??= TransactionQueryOptions.Create();
+            config ??= SingleQueryTransactionConfigBuilder.Create();
+            var options = config.QueryOptions ?? new();
+            var perTransactionConfig = config.Build();
 
-            _ = await RunAsync(async ctx =>
+            IQueryResult<T>? queryResult = null;
+            var transactionResult = await RunAsync(async ctx =>
             {
-                _ = await ctx.QueryAsync<object>(statement, options, true, scope, rootSpan).CAF();
-            }).CAF();
+                queryResult = await ctx.QueryAsync<T>(statement, options, true, scope, rootSpan).CAF();
+            }, perTransactionConfig).CAF();
+
+            return new SingleQueryTransactionResult<T>()
+            {
+                Logs = transactionResult.Logs,
+                QueryResult = queryResult,
+                UnstagingComplete = transactionResult.UnstagingComplete
+            };
         }
 
         private async Task ExecuteApplicationLambda(Func<AttemptContext, Task> transactionLogic, TransactionContext overallContext, ILoggerFactory loggerFactory, TransactionResult result, IRequestSpan parentSpan)
@@ -238,7 +257,7 @@ namespace Couchbase.Transactions
             var memoryLogger = delegatingLoggerFactory.CreateLogger(nameof(ExecuteApplicationLambda));
             var ctx = new AttemptContext(
                 overallContext,
-                Config,
+                overallContext.Config,
                 attemptid,
                 TestHooks,
                 _redactor,

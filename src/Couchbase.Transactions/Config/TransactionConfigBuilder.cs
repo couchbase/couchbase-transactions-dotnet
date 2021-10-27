@@ -13,6 +13,7 @@ namespace Couchbase.Transactions.Config
     public class TransactionConfigBuilder
     {
         private readonly TransactionConfig _config;
+        private TransactionQueryConfigBuilder? _queryConfigBuilder = null;
 
         private TransactionConfigBuilder()
         {
@@ -118,6 +119,17 @@ namespace Couchbase.Transactions.Config
         public TransactionConfigBuilder MetadataCollection(ICouchbaseCollection metadataCollection)
         {
             _config.MetadataCollection = metadataCollection;
+            return this;
+        }
+
+        /// <summary>
+        /// Configuration builder for values related to Query.
+        /// </summary>
+        /// <param name="queryConfigBuilder">A <see cref="TransactionQueryConfigBuilder"/> to configure query options for transactions.</param>
+        /// <returns>The original <see cref="TransactionConfigBuilder"/>.</returns>
+        public TransactionConfigBuilder QueryConfig(TransactionQueryConfigBuilder queryConfigBuilder)
+        {
+            _queryConfigBuilder = queryConfigBuilder;
             return this;
         }
     }

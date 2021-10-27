@@ -51,7 +51,7 @@ namespace Couchbase.Transactions
         private static readonly TimeSpan ExpiryThreshold = TimeSpan.FromMilliseconds(10);
         private static readonly TimeSpan WriteWriteConflictTimeLimit = TimeSpan.FromSeconds(1);
         private readonly TransactionContext _overallContext;
-        private readonly TransactionConfig _config;
+        private readonly TransactionConfigImmutable _config;
         private readonly ITestHooks _testHooks;
         internal IRedactor Redactor { get; }
         private AttemptStates _state = AttemptStates.NOTHING_WRITTEN;
@@ -78,7 +78,7 @@ namespace Couchbase.Transactions
         internal bool UnstagingComplete { get; private set; } = false;
 
         internal AttemptContext(TransactionContext overallContext,
-            TransactionConfig config,
+            TransactionConfigImmutable config,
             string attemptId,
             ITestHooks? testHooks,
             IRedactor redactor,
@@ -1545,6 +1545,30 @@ namespace Couchbase.Transactions
         /// <remarks>Calling this method on AttemptContext is usually unnecessary, as unhandled exceptions will trigger a rollback automatically.</remarks>
         public Task RollbackAsync(IRequestSpan? parentSpan = null) => this.RollbackInternal(true, parentSpan);
 
+        /// <summary>
+        /// Run a query in transaction mode.
+        /// </summary>
+        /// <typeparam name="T">The type of the result.  Use <see cref="object"/> for queries with no results.</typeparam>
+        /// <param name="statement">The statement to execute.</param>
+        /// <param name="config">The configuration to use for this query.</param>
+        /// <param name="scope">The scope</param>
+        /// <returns>A <see cref="SingleQueryTransactionResult{T}"/> with the query results, if any.</returns>
+        /// <remarks>IMPORTANT: Any KV operations after this query will be run via the query engine, which has performance implications.</remarks>
+        public Task<IQueryResult<T>> QueryAsync<T>(string statement, TransactionQueryConfigBuilder config, IScope? scope = null, IRequestSpan? parentSpan = null)
+        {
+            var options = config.Build();
+            return QueryAsync<T>(statement, options, scope, parentSpan);
+        }
+
+        /// <summary>
+        /// Run a query in transaction mode.
+        /// </summary>
+        /// <typeparam name="T">The type of the result.  Use <see cref="object"/> for queries with no results.</typeparam>
+        /// <param name="statement">The statement to execute.</param>
+        /// <param name="options">The query options to use for this query.</param>
+        /// <param name="scope">The scope</param>
+        /// <returns>A <see cref="SingleQueryTransactionResult{T}"/> with the query results, if any.</returns>
+        /// <remarks>IMPORTANT: Any KV operations after this query will be run via the query engine, which has performance implications.</remarks>
         public Task<IQueryResult<T>> QueryAsync<T>(string statement, TransactionQueryOptions options, IScope? scope = null, IRequestSpan? parentSpan = null)
             => QueryAsync<T>(statement, options, false, scope, parentSpan);
 

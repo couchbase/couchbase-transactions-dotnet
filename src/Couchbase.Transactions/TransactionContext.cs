@@ -13,8 +13,8 @@ namespace Couchbase.Transactions
 
         public string TransactionId { get; }
         public DateTimeOffset StartTime { get; }
-        public TransactionConfig Config { get; }
-        public PerTransactionConfig PerConfig { get; }
+        public TransactionConfigImmutable Config { get; }
+        public PerTransactionConfigImmutable PerConfig { get; }
 
         public DateTimeOffset AbsoluteExpiration => StartTime + Config.ExpirationTime;
         public bool IsExpired => AbsoluteExpiration <= DateTimeOffset.UtcNow;
@@ -22,15 +22,15 @@ namespace Couchbase.Transactions
         public TimeSpan RemainingUntilExpiration => AbsoluteExpiration - DateTimeOffset.UtcNow;
 
         public TransactionContext(
-            [NotNull] string transactionId,
+            string transactionId,
             DateTimeOffset startTime,
-            [NotNull] TransactionConfig config,
-            [MaybeNull] PerTransactionConfig perConfig)
+            TransactionConfigImmutable config,
+            PerTransactionConfigImmutable? perConfig)
         {
             TransactionId = transactionId;
             StartTime = startTime;
             Config = config;
-            PerConfig = perConfig ?? new PerTransactionConfig();
+            PerConfig = perConfig ?? new PerTransactionConfig().AsImmutable();
         }
 
         internal void AddLog(string msg) => _logs.Enqueue(msg);

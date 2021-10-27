@@ -17,6 +17,7 @@ namespace Couchbase.Transactions
             yield return new ExtensionName("ExtRemoveCompleted", "EXT_REMOVE_COMPLETED", "RC");
 
             yield return new ExtensionName("ExtQuery", "EXT_QUERY", "QU");
+            yield return new ExtensionName("ExtSingleQuery", "EXT_SINGLE_QUERY", "SQ");
             yield return new ExtensionName("ExtBinaryMetadata", "EXT_BINARY_METADATA", "BM");
             yield return new ExtensionName("ExtCustomMetadataCollection", "EXT_CUSTOM_METADATA_COLLECTION", "CM");
             yield return new ExtensionName("BfCbd3787", "BF_CBD_3787", "BF3787");

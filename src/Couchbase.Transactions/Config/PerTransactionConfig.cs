@@ -14,10 +14,34 @@ namespace Couchbase.Transactions.Config
         { }
 
         /// <summary>
-        /// Gets an optional value indicating the minimum durability level desired.
+        /// Gets an optional value indicating the minimum durability level desired for this transaction.
         /// </summary>
-        public DurabilityLevel? DurabilityLevel { get; internal set; }
+        public DurabilityLevel? DurabilityLevel { get; set; }
+
+        /// <summary>
+        /// Gets an optional value indicating the relative expiration time of the transaction for this transaction..
+        /// </summary>
+        public TimeSpan? ExpirationTime { get; set; }
+
+
+        /// <summary>
+        /// Gets an option value indicating the timeout on Couchbase Key/Value operations for this transaction.
+        /// </summary>
+        public TimeSpan? KeyValueTimeout { get; set; }
+
+        internal PerTransactionConfigImmutable AsImmutable() => new(
+            DurabilityLevel: DurabilityLevel,
+            ExpirationTime: ExpirationTime,
+            KeyValueTimeout: KeyValueTimeout);
     }
+
+    /// <summary>
+    /// An immutable version of <see cref="PerTransactionConfig"/>.
+    /// </summary>
+    internal record PerTransactionConfigImmutable(
+        DurabilityLevel? DurabilityLevel,
+        TimeSpan? ExpirationTime,
+        TimeSpan? KeyValueTimeout);
 }
 
 
