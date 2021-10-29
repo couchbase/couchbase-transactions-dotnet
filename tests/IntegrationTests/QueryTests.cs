@@ -37,7 +37,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             var txnCfg = TransactionConfigBuilder.Create().LoggerFactory(loggerFactory);
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
             var config = new SingleQueryTransactionConfigBuilder();
-            config.QueryOptions.Parameter("docId", docId);
+            config.QueryOptionsValue.Parameter("docId", docId);
             var results = await txn.QueryAsync<object>(statement, config);
             await foreach (var r in results.QueryResult.Rows)
             {
@@ -86,7 +86,7 @@ namespace Couchbase.Transactions.Tests.IntegrationTests
             _outputHelper.WriteLine($"Blocking Doc = {getResult.ContentAs<object>()}");
             var statement = "INSERT INTO default VALUES ($docId, {\"type\": \"example\" })";
             var txn = TestUtil.CreateTransaction(_fixture.Cluster, KeyValue.DurabilityLevel.None, _outputHelper);
-            var t = txn.QueryAsync<object>(statement, config => config.QueryOptions.Parameter("docId", docId));
+            var t = txn.QueryAsync<object>(statement, config => config.QueryOptionsValue.Parameter("docId", docId));
             var err = await Assert.ThrowsAsync<TransactionFailedException>(() => t);
             Assert.False(err.Result.UnstagingComplete);
             if (err.InnerException is TransactionOperationFailedException tof)

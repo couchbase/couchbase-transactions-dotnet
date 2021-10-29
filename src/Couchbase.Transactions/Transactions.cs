@@ -231,7 +231,7 @@ namespace Couchbase.Transactions
                 .SetAttribute("db.couchbase.transactions.tximplicit", true);
 
             config ??= SingleQueryTransactionConfigBuilder.Create();
-            var options = config.QueryOptions ?? new();
+            var options = config.QueryOptionsValue ?? new();
             var perTransactionConfig = config.Build();
 
             IQueryResult<T>? queryResult = null;

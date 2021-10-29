@@ -19,24 +19,73 @@ namespace Couchbase.Transactions.Config
         /// <summary>
         /// Gets or sets the query options for this single query transaction.
         /// </summary>
-        public TransactionQueryOptions QueryOptions { get; set; } = new();
+        public TransactionQueryOptions QueryOptionsValue { get; internal set; } = new();
+
+        /// <summary>
+        /// Configure the query-specific options for this transaction.
+        /// </summary>
+        /// <param name="configure">An Action to configure the query options.</param>
+        /// <returns>The builder.</returns>
+        public SingleQueryTransactionConfigBuilder QueryOptions(Action<TransactionQueryOptions> configure)
+        {
+            if (configure != null)
+            {
+                configure(QueryOptionsValue);
+            }
+
+            return this;
+        }
+
+        /// <summary>
+        /// Set the query-specific options for this transaction.
+        /// </summary>
+        /// <param name="options">The transaction query options to use.</param>
+        /// <returns>The builder.</returns>
+        public SingleQueryTransactionConfigBuilder QueryOptions(TransactionQueryOptions options)
+        {
+            QueryOptionsValue = options;
+            return this;
+        }
+
 
         /// <summary>
         /// Gets or sets the Durability Level for this single query transaction.
         /// </summary>
-        public DurabilityLevel? DurabilityLevel { get; set; } = null;
+        public DurabilityLevel? DurabilityLevelValue { get; internal set; } = null;
+
+        /// <summary>
+        /// Set the durability for this transaction.
+        /// </summary>
+        /// <param name="durability">The durability level to use.</param>
+        /// <returns>The builder.</returns>
+        public SingleQueryTransactionConfigBuilder DurabilityLevel(DurabilityLevel durability)
+        {
+            DurabilityLevelValue = durability;
+            return this;
+        }
 
         /// <summary>
         /// Gets or sets the relative expiration time for this single query transaction.
         /// </summary>
-        public TimeSpan? ExpirationTime { get; set; } = null;
+        public TimeSpan? ExpirationTimeValue { get; internal set; } = null;
+
+        /// <summary>
+        /// Set the expiration time of this transaction.
+        /// </summary>
+        /// <param name="expirationTime">The expiration time, relative to now.</param>
+        /// <returns>The builder.</returns>
+        public SingleQueryTransactionConfigBuilder ExpirationTime(TimeSpan expirationTime)
+        {
+            ExpirationTimeValue = expirationTime;
+            return this;
+        }
 
         internal PerTransactionConfig Build()
         {
             // Build a TransactionConfig, setting only the values that have been set to non-default.
             var config = new PerTransactionConfig();
-            config.ExpirationTime = this.ExpirationTime ?? config.ExpirationTime;
-            config.DurabilityLevel = this.DurabilityLevel ?? config.DurabilityLevel;
+            config.ExpirationTime = this.ExpirationTimeValue ?? config.ExpirationTime;
+            config.DurabilityLevel = this.DurabilityLevelValue ?? config.DurabilityLevel;
             return config;
         }
     }

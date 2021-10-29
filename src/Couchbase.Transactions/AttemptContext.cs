@@ -1554,9 +1554,9 @@ namespace Couchbase.Transactions
         /// <param name="scope">The scope</param>
         /// <returns>A <see cref="SingleQueryTransactionResult{T}"/> with the query results, if any.</returns>
         /// <remarks>IMPORTANT: Any KV operations after this query will be run via the query engine, which has performance implications.</remarks>
-        public Task<IQueryResult<T>> QueryAsync<T>(string statement, TransactionQueryConfigBuilder config, IScope? scope = null, IRequestSpan? parentSpan = null)
+        public Task<IQueryResult<T>> QueryAsync<T>(string statement, TransactionQueryConfigBuilder config = null, IScope? scope = null, IRequestSpan? parentSpan = null)
         {
-            var options = config.Build();
+            var options = config?.Build() ?? new TransactionQueryOptions();
             return QueryAsync<T>(statement, options, scope, parentSpan);
         }
 
