@@ -13,7 +13,8 @@
     <Company>Couchbase, Inc</Company>
     <Authors>Couchbase, Inc</Authors>
     <Description>This package provides functionality for Couchbase Distributed ACID Transactions for .NET Core. Distributed ACID Transactions are operations that ensure that when multiple documents need to be modified such that only the successful modification of all justifies the modification of any, either all the modifications do occur successfully; or none of them occurs. This Atomicity supports insert, update, and delete operations, across any number of documents.</Description>
-    <Version>1.0.0-alpha.2</Version>
+    <!-- this is also set by the CI build -->
+    <Version>1.1.0</Version>
     <RepositoryUrl>https://github.com/couchbase/couchbase-transactions-dotnet</RepositoryUrl>
     <RepositoryType>GitHub</RepositoryType>
     <PackageTags>couchbase, transactions, distributed</PackageTags>
@@ -40,7 +41,7 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(UseNugetForCouchbaseNetClient)' == 'true'">
-    <PackageReference Include="CouchbaseNetClient" Version="3.1.*" />
+    <PackageReference Include="CouchbaseNetClient" Version="3.2.*" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Crc32.NET" Version="1.2.0" />
