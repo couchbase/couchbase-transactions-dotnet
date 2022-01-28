@@ -1,3 +1,7 @@
+# Deprecated!
+
+Note:  This repo is deprecated.  Couchbase.Transactions has been merged into the main Couchbase dotnet repo at https://github.com/couchbase/couchbase-net-client
+
 # Couchbase Transactions for .NET
 
 This is the official Distributed Transactions SDK for Couchbase in .NET.
